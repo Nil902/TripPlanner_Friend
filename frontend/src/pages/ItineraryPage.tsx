@@ -79,7 +79,7 @@ export default function ItineraryPage({ tripId }: ItineraryPageProps) {
   const [stopsByDay, setStopsByDay] = useState<Record<number, Stop[]>>({});
   const [isAddingStop, setIsAddingStop] = useState(false);
   const [newStopName, setNewStopName] = useState('');
-  const [newStopTime, setNewStopTime] = useState('4:00 PM');
+  const [newStopTime, setNewStopTime] = useState('16:00');
   const [newStopCost, setNewStopCost] = useState('10');
 
   const loadPlan = useCallback(() => {
@@ -135,9 +135,17 @@ export default function ItineraryPage({ tripId }: ItineraryPageProps) {
     const dayIdx = day - 1;
 
     try {
-      const now = new Date();
-      const startTime = new Date(now.setHours(10 + dayIdx * 2, 0, 0)).toISOString();
-      const endTime = new Date(now.setHours(12 + dayIdx * 2, 0, 0)).toISOString();
+      const [hoursStr, minutesStr] = newStopTime.split(':');
+      const hours = parseInt(hoursStr || '16', 10);
+      const minutes = parseInt(minutesStr || '0', 10);
+      
+      const startTimeObj = new Date();
+      startTimeObj.setHours(hours, minutes, 0, 0);
+      const startTime = startTimeObj.toISOString();
+      
+      const endTimeObj = new Date(startTimeObj);
+      endTimeObj.setHours(hours + 2, minutes, 0, 0);
+      const endTime = endTimeObj.toISOString();
 
       await api.plan.addItem(tripId, {
         day_index: dayIdx,
@@ -481,8 +489,7 @@ export default function ItineraryPage({ tripId }: ItineraryPageProps) {
             }}
           />
           <input
-            type="text"
-            placeholder="Time (e.g. 3:30 PM)"
+            type="time"
             value={newStopTime}
             onChange={(e) => setNewStopTime(e.target.value)}
             style={{
@@ -495,21 +502,25 @@ export default function ItineraryPage({ tripId }: ItineraryPageProps) {
               outline: 'none',
             }}
           />
-          <input
-            type="number"
-            placeholder="Cost $"
-            value={newStopCost}
-            onChange={(e) => setNewStopCost(e.target.value)}
-            style={{
-              width: 70,
-              padding: '8px 10px',
-              borderRadius: 6,
-              border: `1px solid ${BORDER}`,
-              fontSize: 13,
-              background: '#fff',
-              outline: 'none',
-            }}
-          />
+          <div style={{ position: 'relative', width: 80 }}>
+            <span style={{ position: 'absolute', left: 10, top: 9, fontSize: 13, color: MUTED }}>$</span>
+            <input
+              type="number"
+              placeholder="0"
+              value={newStopCost}
+              onChange={(e) => setNewStopCost(e.target.value)}
+              style={{
+                width: '100%',
+                padding: '8px 10px 8px 22px',
+                borderRadius: 6,
+                border: `1px solid ${BORDER}`,
+                fontSize: 13,
+                background: '#fff',
+                outline: 'none',
+                boxSizing: 'border-box',
+              }}
+            />
+          </div>
           <button
             type="submit"
             style={{

@@ -106,17 +106,29 @@ export default function OverviewPage({
     }
   };
 
+  let nightsCount = 2;
+  try {
+    const start = new Date(trip.start_date);
+    const end = new Date(trip.end_date);
+    const diff = Math.round((end.getTime() - start.getTime()) / (1000 * 60 * 60 * 24));
+    if (!isNaN(diff) && diff >= 0) {
+      nightsCount = diff;
+    }
+  } catch {
+    // Fallback to 2
+  }
+
   return (
-    <div style={{ width: '100%', maxWidth: 760, margin: '0 auto' }}>
-      {/* Title & Dates */}
+    <div style={{ animation: 'fadeIn 0.4s ease-out' }}>
+      {/* Header */}
       <div
         style={{
           display: 'flex',
           justifyContent: 'space-between',
           alignItems: 'flex-start',
-          marginBottom: 20,
+          marginBottom: 32,
           flexWrap: 'wrap',
-          gap: 12,
+          gap: 16,
         }}
       >
         <div>
@@ -129,7 +141,7 @@ export default function OverviewPage({
               color: INK,
             }}
           >
-            {trip.destination}, 2 nights
+            {trip.destination}, {nightsCount} night{nightsCount !== 1 ? 's' : ''}
           </h1>
           <p
             style={{

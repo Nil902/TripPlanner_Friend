@@ -1,0 +1,31 @@
+{
+  "id": "scenario_02_disruption_venue_closure",
+  "name": "Forced Disruption: Venue Closure on Day 2",
+  "trip": {
+    "title": "Lisbon Disruption Rebalance",
+    "destination": "Lisbon",
+    "days": 3
+  },
+  "constraints": [
+    {
+      "user_id": "charlie",
+      "budget_per_day": 100.0,
+      "dietary": [],
+      "style_tags": ["culture"],
+      "must_see": ["Belém Tower"],
+      "must_avoid": []
+    }
+  ],
+  "disruption": {
+    "type": "venue_closed",
+    "day_index": 1,
+    "place_name": "Belém Tower",
+    "description": "Closed for emergency maintenance"
+  },
+  "expected_properties": [
+    "only_affected_day_modified",
+    "unaffected_days_identical",
+    "replacement_venue_found",
+    "tradeoff_notes_explain_change"
+  ]
+}

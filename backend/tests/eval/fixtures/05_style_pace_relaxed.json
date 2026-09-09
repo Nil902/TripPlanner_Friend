@@ -1,0 +1,24 @@
+{
+  "id": "scenario_05_style_pace_relaxed",
+  "name": "Pace Balancing: Relaxed vs Packed Schedule",
+  "trip": {
+    "title": "Lisbon Slow Travel",
+    "destination": "Lisbon",
+    "days": 2
+  },
+  "constraints": [
+    {
+      "user_id": "frank",
+      "budget_per_day": 70.0,
+      "dietary": [],
+      "style_tags": ["relaxed"],
+      "must_see": ["Miradouro de Santa Luzia"],
+      "must_avoid": []
+    }
+  ],
+  "expected_properties": [
+    "no_transit_over_35_mins",
+    "consecutive_transit_sufficient_gap",
+    "must_see_included"
+  ]
+}

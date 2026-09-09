@@ -1,0 +1,32 @@
+{
+  "id": "scenario_01_budget_conflict",
+  "name": "Budget Conflict (Alice $40 vs Bob $80 in Lisbon)",
+  "trip": {
+    "title": "Lisbon Budget Balance",
+    "destination": "Lisbon",
+    "days": 2
+  },
+  "constraints": [
+    {
+      "user_id": "alice",
+      "budget_per_day": 40.0,
+      "dietary": ["vegetarian"],
+      "style_tags": ["relaxed"],
+      "must_see": ["Pastéis de Belém"],
+      "must_avoid": []
+    },
+    {
+      "user_id": "bob",
+      "budget_per_day": 80.0,
+      "dietary": [],
+      "style_tags": ["foodie"],
+      "must_see": ["Jerónimos Monastery"],
+      "must_avoid": []
+    }
+  ],
+  "expected_properties": [
+    "budget_cap_within_tolerance",
+    "at_least_one_food_option_per_day",
+    "no_transit_over_35_mins"
+  ]
+}

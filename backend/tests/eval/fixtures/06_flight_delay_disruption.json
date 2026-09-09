@@ -1,0 +1,30 @@
+{
+  "id": "scenario_06_flight_delay_disruption",
+  "name": "Dynamic Rebalancing on 2-Hour Flight Delay",
+  "trip": {
+    "title": "Tokyo Flight Delay Recovery",
+    "destination": "Tokyo",
+    "days": 2
+  },
+  "constraints": [
+    {
+      "user_id": "grace",
+      "budget_per_day": 100.0,
+      "dietary": [],
+      "style_tags": ["culture"],
+      "must_see": ["Senso-ji Temple"],
+      "must_avoid": []
+    }
+  ],
+  "disruption": {
+    "type": "flight_delayed",
+    "day_index": 0,
+    "delay_minutes": 120,
+    "description": "Inbound flight delayed 2 hours due to weather"
+  },
+  "expected_properties": [
+    "only_affected_day_modified",
+    "unaffected_days_identical",
+    "tradeoff_notes_explain_change"
+  ]
+}

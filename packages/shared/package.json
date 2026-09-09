@@ -1,0 +1,8 @@
+{
+  "name": "@travel-planner/shared",
+  "version": "1.0.0",
+  "description": "Shared domain models, contracts, and TypeScript types for the Travel Itinerary Coordinator",
+  "main": "types.ts",
+  "types": "types.ts",
+  "private": true
+}

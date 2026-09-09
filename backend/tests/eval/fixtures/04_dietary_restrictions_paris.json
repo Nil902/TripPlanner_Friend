@@ -1,0 +1,24 @@
+{
+  "id": "scenario_04_dietary_restrictions",
+  "name": "Strict Dietary Restrictions in Paris",
+  "trip": {
+    "title": "Paris Plant-Based Tour",
+    "destination": "Paris",
+    "days": 2
+  },
+  "constraints": [
+    {
+      "user_id": "elena",
+      "budget_per_day": 90.0,
+      "dietary": ["vegetarian", "vegan"],
+      "style_tags": ["foodie", "relaxed"],
+      "must_see": ["Louvre Museum"],
+      "must_avoid": ["steakhouse", "meat"]
+    }
+  ],
+  "expected_properties": [
+    "at_least_one_food_option_per_day",
+    "must_avoid_respected",
+    "budget_cap_within_tolerance"
+  ]
+}

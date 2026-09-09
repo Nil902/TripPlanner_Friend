@@ -1,0 +1,23 @@
+{
+  "id": "scenario_03_transit_backtracking",
+  "name": "Transit Backtracking Prevention in Tokyo",
+  "trip": {
+    "title": "Tokyo Neighborhood Grouping",
+    "destination": "Tokyo",
+    "days": 3
+  },
+  "constraints": [
+    {
+      "user_id": "daisuke",
+      "budget_per_day": 120.0,
+      "dietary": [],
+      "style_tags": ["sightseeing"],
+      "must_see": ["Senso-ji Temple", "Tokyo Skytree"],
+      "must_avoid": []
+    }
+  ],
+  "expected_properties": [
+    "no_transit_over_35_mins",
+    "consecutive_transit_sufficient_gap"
+  ]
+}

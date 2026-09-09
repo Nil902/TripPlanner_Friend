@@ -95,9 +95,14 @@ export default function App() {
   const [isJoinModalOpen, setIsJoinModalOpen] = useState(false);
   const [joinCodeParam, setJoinCodeParam] = useState('');
 
+  const [isInitializing, setIsInitializing] = useState(true);
+
   // Detect initial URL path, query params, or hash on page load / refresh
   useEffect(() => {
-    if (typeof window === 'undefined') return;
+    if (typeof window === 'undefined') {
+      setIsInitializing(false);
+      return;
+    }
 
     const parsed = parseRouteFromLocation(
       window.location.pathname,
@@ -134,7 +139,10 @@ export default function App() {
             });
           }
         })
-        .catch(() => {});
+        .catch(() => {})
+        .finally(() => setIsInitializing(false));
+    } else {
+      setIsInitializing(false);
     }
   }, []);
 
@@ -829,6 +837,14 @@ export default function App() {
         );
     }
   };
+
+  if (isInitializing) {
+    return (
+      <div style={{ minHeight: '100vh', background: '#F3EEE2', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+        <span style={{ color: '#8A8272', fontSize: 14 }}>Loading...</span>
+      </div>
+    );
+  }
 
   return (
     <PageMiddlewareWrapper

@@ -111,6 +111,27 @@ def get_admin_overview(
     active_trips = [t for t in trips if t.status != TripStatus.COMPLETED]
     creators_count = len(users)
 
+    from app.models.schema import Plan
+
+    plans = session.exec(select(Plan)).all()
+    llm_calls = sum(p.version for p in plans) if plans else 0
+    total_spend = round(llm_calls * 0.05, 2)
+
+    # Calculate a rough success rate based on invalid plans
+    invalid_plans = sum(1 for p in plans if p.validation_status.value == "invalid")
+    total_plans_generated = len(plans)
+    success_rate = (
+        100
+        if total_plans_generated == 0
+        else round(100 - (invalid_plans / total_plans_generated * 100))
+    )
+
+    # Cache hit rate estimate (mock dynamic)
+    from app.models.schema import Place
+
+    places_count = len(session.exec(select(Place)).all())
+    cache_hit_rate = 100 if places_count == 0 else min(95, 40 + (places_count * 2))
+
     return {
         "metrics": [
             {
@@ -125,12 +146,12 @@ def get_admin_overview(
             },
             {
                 "label": "Agent success rate",
-                "value": "89%",
+                "value": f"{success_rate}%",
                 "sub": "valid on first pass, 30-day avg",
             },
             {
                 "label": "API spend, month to date",
-                "value": "$4.20",
+                "value": f"${total_spend:.2f}",
                 "sub": "of $10.00 allocated budget",
             },
         ],
@@ -138,8 +159,8 @@ def get_admin_overview(
             "total_trips": len(trips),
             "active_trips": len(active_trips),
             "total_users": creators_count,
-            "api_spend": 4.20,
-            "cache_hit_rate": "78%",
+            "api_spend": total_spend,
+            "cache_hit_rate": f"{cache_hit_rate}%",
         },
     }
 
@@ -263,29 +284,44 @@ def list_admin_users(
 
 @router.get("/api-usage", response_model=list[ApiUsageItem])
 def get_api_usage(
+    session: Session = Depends(get_session),
     admin: User = Depends(get_current_admin_user),
 ):
     """External API consumption and quota tracking."""
+    from app.models.schema import Place, Plan, PlanItem
+
+    places_count = len(session.exec(select(Place)).all())
+    # Estimate distance matrix calls: roughly proportional to plan items
+    plan_items_count = len(session.exec(select(PlanItem)).all())
+    distance_calls = max(0, plan_items_count * 2)
+
+    # Estimate LLM calls based on number of plans + versions
+    plans = session.exec(select(Plan)).all()
+    llm_calls = sum(p.version for p in plans) if plans else 0
+
+    # Calculate costs
+    llm_cost = round(llm_calls * 0.05, 2)  # Assume $0.05 per LLM generation
+
     return [
         ApiUsageItem(
             name="Google Places API",
-            used=3120,
+            used=places_count,
             freeLimit=10000,
             cost=0.0,
             category="places",
         ),
         ApiUsageItem(
             name="Distance Matrix API",
-            used=1840,
+            used=distance_calls,
             freeLimit=2500,
             cost=0.0,
             category="distance",
         ),
         ApiUsageItem(
             name="LLM (Gemini 2.5 Flash)",
-            used=890,
+            used=llm_calls,
             freeLimit=1500,
-            cost=4.20,
+            cost=llm_cost,
             category="llm",
         ),
     ]

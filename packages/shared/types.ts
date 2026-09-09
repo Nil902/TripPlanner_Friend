@@ -216,6 +216,7 @@ export interface CreatePlanItemRequest {
 }
 
 export interface UpdatePlanItemRequest {
+  day_index?: number;
   place_name?: string;
   category?: string;
   start_time?: string;

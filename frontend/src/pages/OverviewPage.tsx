@@ -8,7 +8,9 @@ import {
   Calendar,
   RefreshCw,
   Settings,
+  QrCode,
 } from 'lucide-react';
+import { QRCodeSVG } from 'qrcode.react';
 import {
   BORDER,
   MUTED,
@@ -42,6 +44,7 @@ export default function OverviewPage({
   onOpenAdmin,
 }: OverviewPageProps) {
   const [copied, setCopied] = useState(false);
+  const [showQRModal, setShowQRModal] = useState(false);
   const [isGenerating, setIsGenerating] = useState(false);
   const [generationStep, setGenerationStep] = useState<string | null>(null);
   const [agentNotes, setAgentNotes] = useState<string[]>([]);
@@ -183,19 +186,37 @@ export default function OverviewPage({
           Invite code: <strong style={{ fontFamily: 'monospace' }}>{trip.id}</strong>{' '}
           (Friends join without an account)
         </span>
-        <button
-          type="button"
-          onClick={handleCopyLink}
-          style={{
-            border: 'none',
-            background: 'transparent',
-            color: PINE,
-            fontWeight: 600,
-            cursor: 'pointer',
-          }}
-        >
-          {copied ? 'Copied' : 'Copy'}
-        </button>
+        <div style={{ display: 'flex', gap: 16, alignItems: 'center' }}>
+          <button
+            type="button"
+            onClick={() => setShowQRModal(true)}
+            style={{
+              border: 'none',
+              background: 'transparent',
+              color: PINE,
+              fontWeight: 600,
+              cursor: 'pointer',
+              display: 'flex',
+              alignItems: 'center',
+              gap: 4,
+            }}
+          >
+            <QrCode size={14} /> QR Code
+          </button>
+          <button
+            type="button"
+            onClick={handleCopyLink}
+            style={{
+              border: 'none',
+              background: 'transparent',
+              color: PINE,
+              fontWeight: 600,
+              cursor: 'pointer',
+            }}
+          >
+            {copied ? 'Copied' : 'Copy Link'}
+          </button>
+        </div>
       </div>
 
       {/* Who's in Card */}
@@ -431,6 +452,49 @@ export default function OverviewPage({
                 <span>{note}</span>
               </div>
             ))}
+          </div>
+        </div>
+      )}
+
+      {showQRModal && (
+        <div
+          style={{
+            position: 'fixed',
+            top: 0,
+            left: 0,
+            right: 0,
+            bottom: 0,
+            backgroundColor: 'rgba(0, 0, 0, 0.4)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            zIndex: 9999,
+          }}
+          onClick={() => setShowQRModal(false)}
+        >
+          <div
+            style={{
+              background: '#fff',
+              padding: 32,
+              borderRadius: 16,
+              display: 'flex',
+              flexDirection: 'column',
+              alignItems: 'center',
+              gap: 16,
+              boxShadow: '0 10px 25px rgba(0,0,0,0.1)',
+            }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <h3 style={{ margin: 0, ...SERIF, fontSize: 20 }}>Scan to Join</h3>
+            <p style={{ margin: 0, fontSize: 14, color: MUTED, textAlign: 'center', maxWidth: 220 }}>
+              Anyone scanning this can join <b>{trip.destination}</b> instantly.
+            </p>
+            <div style={{ padding: 16, border: `1px solid ${BORDER}`, borderRadius: 12, background: '#fff' }}>
+              <QRCodeSVG value={`${window.location.origin}/?code=${trip.id}`} size={200} />
+            </div>
+            <SecondaryButton onClick={() => setShowQRModal(false)} style={{ width: '100%', marginTop: 8 }}>
+              Close
+            </SecondaryButton>
           </div>
         </div>
       )}

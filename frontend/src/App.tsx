@@ -115,6 +115,27 @@ export default function App() {
       setJoinCodeParam(parsed.joinCode);
       setIsJoinModalOpen(true);
     }
+
+    // Restore active trip from URL on hard refresh (e.g. /room?trip=xxx or /manage?trip=xxx)
+    if (parsed.tripId && (parsed.screen === 'room' || parsed.screen === 'owner')) {
+      api.trips
+        .get(parsed.tripId)
+        .then((t) => {
+          if (t?.id) {
+            setActiveTrip({
+              id: t.id,
+              title: t.title,
+              destination: t.destination,
+              start_date: String(t.start_date),
+              end_date: String(t.end_date),
+              creator_id: t.creator_id,
+              status: t.status as TripSummary['status'],
+              member_ids: t.member_ids || [],
+            });
+          }
+        })
+        .catch(() => {});
+    }
   }, []);
 
   // Synchronize screen & active tab state with browser address bar across all pages

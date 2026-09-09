@@ -36,12 +36,12 @@ export function getPathForScreen(
     case 'auth':
       return '/auth';
     case 'owner':
-      return tripId && tripId !== 'trip-lisbon-202'
+      return tripId
         ? `/manage?trip=${encodeURIComponent(tripId)}`
         : '/manage';
     case 'room': {
       const params = new URLSearchParams();
-      if (tripId && tripId !== 'trip-lisbon-202') {
+      if (tripId) {
         params.set('trip', tripId);
       }
       if (tab !== 'overview') {

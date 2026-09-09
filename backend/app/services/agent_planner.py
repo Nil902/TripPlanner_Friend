@@ -6,6 +6,7 @@ Implements iterative self-correction using deterministic domain validators.
 import json
 import logging
 import re
+import time
 import uuid
 from datetime import date, datetime, timedelta
 
@@ -16,6 +17,7 @@ from app.core.config import settings
 from app.models.schema import (
     Constraint,
     DisruptionEvent,
+    DisruptionType,
     Place,
     PlaceResponse,
     Plan,
@@ -168,10 +170,33 @@ class AgentPlanner:
             )
             replacement_attempts += 1
 
-        # 3. Fallback / Constraint Relaxation if max iterations reached
+        # 3. Fallback / Constraint Relaxation if max iterations reached (spec Section 9.2)
         if best_issues_count > 0:
+            budget_tolerance = 0.15  # Relax budget by 15%
+            # Run ONE extra propose+validate pass with relaxed budget
+            relaxed_days = cls._call_gemini_proposer(
+                trip=trip,
+                constraints=constraints,
+                places=usable_places,
+                day_dates=day_dates,
+                feedback=feedback_history,
+                instruction=None,
+            ) or cls._propose_schedule(
+                day_dates=day_dates,
+                places=usable_places,
+                must_sees=must_sees,
+                replacement_attempts=replacement_attempts,
+            )
+            relaxed_errors = [
+                i
+                for i in check_budget(relaxed_days, constraints, budget_tolerance)
+                + check_travel_time(relaxed_days)
+                + check_open_hours(relaxed_days)
+                if i.severity == "error"
+            ]
+            if len(relaxed_errors) < best_issues_count:
+                best_days = relaxed_days
             status = ValidationStatus.PARTIAL
-            budget_tolerance = 0.15  # Relax budget by 15% (Section 9.2)
             notes.append(
                 "Reached maximum iterations (5). Applied Section 9.2 Constraint Relaxation: "
                 "Relaxed daily budget cap by 15% to preserve must-see attractions without dropping key venues."
@@ -313,10 +338,9 @@ class AgentPlanner:
 
                 for it in items_for_day:
                     place = session.get(Place, it.place_id)
-                    should_replace = (
-                        disruption.place_id == it.place_id
-                        or disruption.type.value == "venue_closed"
-                        and disruption.place_id == it.place_id
+                    should_replace = disruption.place_id == it.place_id or (
+                        disruption.type == DisruptionType.VENUE_CLOSED
+                        and disruption.place_id is None
                     )
 
                     target_place: Place | None = place
@@ -585,79 +609,100 @@ class AgentPlanner:
                 },
             }
 
-            with httpx.Client(timeout=5.0) as client:
-                res = client.post(url, json=payload)
-                if res.status_code == 200:
-                    data = res.json()
-                    candidates = data.get("candidates", [])
-                    if candidates:
-                        raw_text = (
-                            candidates[0]
-                            .get("content", {})
-                            .get("parts", [{}])[0]
-                            .get("text", "")
-                        )
-                        parsed = json.loads(raw_text)
-                        parsed_days = parsed.get("days", [])
-                        if parsed_days and isinstance(parsed_days, list):
-                            result_days: list[PlanDayResponse] = []
-                            for d_idx, d_date in enumerate(day_dates):
-                                match_d = next(
-                                    (
-                                        d
-                                        for d in parsed_days
-                                        if isinstance(d, dict)
-                                        and d.get("day_index") == d_idx
-                                    ),
-                                    None,
-                                )
-                                items: list[PlanItemResponse] = []
-                                if match_d:
-                                    raw_items = match_d.get("items", [])
-                                    for it in raw_items:
-                                        if not isinstance(it, dict):
-                                            continue
-                                        pid = str(it.get("place_id", ""))
-                                        if pid in place_dict:
-                                            p_obj = place_dict[pid]
-                                            try:
-                                                st = datetime.fromisoformat(
-                                                    str(it.get("start_time"))
-                                                )
-                                                et = datetime.fromisoformat(
-                                                    str(it.get("end_time"))
-                                                )
-                                            except Exception:
-                                                st = datetime.combine(
-                                                    d_date, datetime.min.time()
-                                                ).replace(hour=10)
-                                                et = datetime.combine(
-                                                    d_date, datetime.min.time()
-                                                ).replace(hour=12)
-                                            cost = float(it.get("cost", p_obj.est_cost))
-                                            items.append(
-                                                PlanItemResponse(
-                                                    id=str(uuid.uuid4()),
-                                                    place_id=pid,
-                                                    place=PlaceResponse.model_validate(
-                                                        p_obj
-                                                    ),
-                                                    day_index=d_idx,
-                                                    start_time=st,
-                                                    end_time=et,
-                                                    cost=cost,
-                                                )
-                                            )
-                                result_days.append(
-                                    PlanDayResponse(
-                                        date=d_date,
-                                        day_index=d_idx,
-                                        items=items,
+            for attempt in range(2):  # spec 9.3: retry once with backoff
+                try:
+                    with httpx.Client(timeout=5.0) as client:
+                        res = client.post(url, json=payload)
+                    if res.status_code == 200:
+                        data = res.json()
+                        candidates = data.get("candidates", [])
+                        if candidates:
+                            raw_text = (
+                                candidates[0]
+                                .get("content", {})
+                                .get("parts", [{}])[0]
+                                .get("text", "")
+                            )
+                            parsed = json.loads(raw_text)
+                            parsed_days = parsed.get("days", [])
+                            if parsed_days and isinstance(parsed_days, list):
+                                result_days: list[PlanDayResponse] = []
+                                for d_idx, d_date in enumerate(day_dates):
+                                    match_d = next(
+                                        (
+                                            d
+                                            for d in parsed_days
+                                            if isinstance(d, dict)
+                                            and d.get("day_index") == d_idx
+                                        ),
+                                        None,
                                     )
-                                )
-                            total_items = sum(len(d.items) for d in result_days)
-                            if total_items > 0:
-                                return result_days
+                                    items: list[PlanItemResponse] = []
+                                    if match_d:
+                                        raw_items = match_d.get("items", [])
+                                        for it in raw_items:
+                                            if not isinstance(it, dict):
+                                                continue
+                                            pid = str(it.get("place_id", ""))
+                                            if pid in place_dict:
+                                                p_obj = place_dict[pid]
+                                                try:
+                                                    st = datetime.fromisoformat(
+                                                        str(it.get("start_time"))
+                                                    )
+                                                    et = datetime.fromisoformat(
+                                                        str(it.get("end_time"))
+                                                    )
+                                                except Exception:
+                                                    st = datetime.combine(
+                                                        d_date, datetime.min.time()
+                                                    ).replace(hour=10)
+                                                    et = datetime.combine(
+                                                        d_date, datetime.min.time()
+                                                    ).replace(hour=12)
+                                                cost = float(
+                                                    it.get("cost", p_obj.est_cost)
+                                                )
+                                                items.append(
+                                                    PlanItemResponse(
+                                                        id=str(uuid.uuid4()),
+                                                        place_id=pid,
+                                                        place=PlaceResponse.model_validate(
+                                                            p_obj
+                                                        ),
+                                                        day_index=d_idx,
+                                                        start_time=st,
+                                                        end_time=et,
+                                                        cost=cost,
+                                                    )
+                                                )
+                                    result_days.append(
+                                        PlanDayResponse(
+                                            date=d_date,
+                                            day_index=d_idx,
+                                            items=items,
+                                        )
+                                    )
+                                total_items = sum(len(d.items) for d in result_days)
+                                if total_items > 0:
+                                    return result_days
+                    # Non-200 or empty result — retry if first attempt
+                    if attempt == 0:
+                        logger.warning(
+                            f"Gemini API returned status {res.status_code} on attempt 1; retrying..."
+                        )
+                        time.sleep(1.0)
+                except Exception as exc:
+                    if attempt == 0:
+                        logger.warning(
+                            f"Gemini LLM attempt 1 failed ({exc}); retrying..."
+                        )
+                        time.sleep(1.0)
+                    else:
+                        logger.warning(
+                            f"Gemini LLM proposal failed after 2 attempts ({exc}). "
+                            "Falling back to heuristic proposer."
+                        )
         except Exception as exc:
             logger.warning(
                 f"Gemini LLM proposal failed ({exc}). Falling back to heuristic proposer."

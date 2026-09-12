@@ -74,3 +74,8 @@ Thumbs.db
 *.swo
 *~
 
+# AI Agent Instructions (not tracked in the repo)
+.antigravity/
+AGENTS.md
+**/AGENTS.md
+

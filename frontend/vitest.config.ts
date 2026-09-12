@@ -15,4 +15,7 @@ export default defineConfig({
     environment: "jsdom",
     setupFiles: "./src/setupTests.ts",
   },
+  define: {
+    'import.meta.env.VITEST': 'true',
+  },
 });

@@ -154,6 +154,8 @@ export default function CreateTripModal({
           <button
             type="button"
             onClick={onClose}
+            aria-label="Close create trip modal"
+            title="Close"
             style={{
               border: 'none',
               background: 'transparent',

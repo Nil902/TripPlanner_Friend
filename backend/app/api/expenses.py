@@ -27,7 +27,45 @@ def add_expense(
     """Log a new group expense."""
     trip = session.get(Trip, trip_id)
     if not trip:
-        raise HTTPException(status_code=404, detail="Trip not found")
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={
+                "code": "TRIP_NOT_FOUND",
+                "message": f"Trip '{trip_id}' not found.",
+            },
+        )
+
+    if req.amount <= 0:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={
+                "code": "INVALID_AMOUNT",
+                "message": "Expense amount must be greater than 0.",
+            },
+        )
+
+    if req.paid_by not in trip.member_ids:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={
+                "code": "NOT_A_MEMBER",
+                "message": "Payer must be a member of the trip.",
+            },
+        )
+
+    invalid_splits = (
+        [m for m in req.split_between if m not in trip.member_ids]
+        if req.split_between
+        else []
+    )
+    if invalid_splits:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={
+                "code": "NOT_A_MEMBER",
+                "message": f"Split member(s) not in trip: {', '.join(invalid_splits)}",
+            },
+        )
 
     # If split_between is empty, default to all trip members
     split_members = req.split_between if req.split_between else list(trip.member_ids)
@@ -56,7 +94,13 @@ def list_expenses(
     """List all recorded expenses for a trip."""
     trip = session.get(Trip, trip_id)
     if not trip:
-        raise HTTPException(status_code=404, detail="Trip not found")
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={
+                "code": "TRIP_NOT_FOUND",
+                "message": f"Trip '{trip_id}' not found.",
+            },
+        )
 
     expenses = session.exec(
         select(Expense)
@@ -76,7 +120,22 @@ def update_expense(
     """Update an existing expense (Always allow all edits)."""
     expense = session.get(Expense, expense_id)
     if not expense or expense.trip_id != trip_id:
-        raise HTTPException(status_code=404, detail="Expense not found")
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={
+                "code": "EXPENSE_NOT_FOUND",
+                "message": f"Expense '{expense_id}' not found.",
+            },
+        )
+
+    if req.amount is not None and req.amount <= 0:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={
+                "code": "INVALID_AMOUNT",
+                "message": "Expense amount must be greater than 0.",
+            },
+        )
 
     if req.paid_by is not None:
         expense.paid_by = req.paid_by
@@ -104,7 +163,13 @@ def delete_expense(
     """Delete an expense."""
     expense = session.get(Expense, expense_id)
     if not expense or expense.trip_id != trip_id:
-        raise HTTPException(status_code=404, detail="Expense not found")
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={
+                "code": "EXPENSE_NOT_FOUND",
+                "message": f"Expense '{expense_id}' not found.",
+            },
+        )
 
     session.delete(expense)
     session.commit()
@@ -119,7 +184,13 @@ def get_settle_up(
     """Calculate greedy minimal-transaction debt settlement."""
     trip = session.get(Trip, trip_id)
     if not trip:
-        raise HTTPException(status_code=404, detail="Trip not found")
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={
+                "code": "TRIP_NOT_FOUND",
+                "message": f"Trip '{trip_id}' not found.",
+            },
+        )
 
     expenses = session.exec(select(Expense).where(Expense.trip_id == trip_id)).all()
 

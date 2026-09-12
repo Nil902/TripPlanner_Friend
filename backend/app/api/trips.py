@@ -48,6 +48,22 @@ def create_trip(
     session: Session = Depends(get_session),
 ):
     """Create a new trip room."""
+    if not req.title.strip():
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={
+                "code": "INVALID_TITLE",
+                "message": "Trip title cannot be empty.",
+            },
+        )
+    if not req.destination.strip():
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={
+                "code": "INVALID_DESTINATION",
+                "message": "Trip destination cannot be empty.",
+            },
+        )
     if req.end_date < req.start_date:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -314,6 +330,35 @@ def update_trip(
                     "message": "Only the trip creator can update this trip.",
                 },
             )
+
+    if req.title is not None and not req.title.strip():
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={
+                "code": "INVALID_TITLE",
+                "message": "Trip title cannot be empty.",
+            },
+        )
+    if req.destination is not None and not req.destination.strip():
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={
+                "code": "INVALID_DESTINATION",
+                "message": "Trip destination cannot be empty.",
+            },
+        )
+
+    # Validate date range when either date is being updated
+    new_start = req.start_date if req.start_date is not None else trip.start_date
+    new_end = req.end_date if req.end_date is not None else trip.end_date
+    if new_end < new_start:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={
+                "code": "INVALID_DATES",
+                "message": "Trip end date must be on or after start date.",
+            },
+        )
 
     if req.title is not None:
         trip.title = req.title

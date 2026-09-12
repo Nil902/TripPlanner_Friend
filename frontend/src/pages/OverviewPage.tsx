@@ -1,14 +1,17 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import {
   Sparkles,
   MapPin,
   Share2,
   Check,
-  CheckCircle2,
   Calendar,
   RefreshCw,
   Settings,
   QrCode,
+  Plus,
+  Trash2,
+  ArrowRight,
+  Clock,
 } from 'lucide-react';
 import { QRCodeSVG } from 'qrcode.react';
 import {
@@ -22,7 +25,36 @@ import {
 } from '../lib/constants';
 import Avatar from '../components/Avatar';
 import { PrimaryButton, SecondaryButton } from '../components/Button';
+import AgentExplanations from '../components/AgentExplanations';
 import { api } from '../lib/api';
+
+const DESTINATION_SUGGESTIONS: Record<string, Array<{ name: string; category: string; cost: number }>> = {
+  lisbon: [
+    { name: 'Belém Tower', category: 'Landmark', cost: 10 },
+    { name: 'Jerónimos Monastery', category: 'Landmark', cost: 12 },
+    { name: 'Time Out Market Lisbon', category: 'Restaurant', cost: 22 },
+    { name: 'MAAT Museum', category: 'Museum', cost: 11 },
+    { name: 'LX Factory Entertainment', category: 'Entertainment', cost: 0 },
+    { name: 'Miradouro de Santa Luzia', category: 'Viewpoint', cost: 0 },
+  ],
+  tokyo: [
+    { name: 'Senso-ji Temple', category: 'Landmark', cost: 0 },
+    { name: 'Shibuya Crossing & Hachiko', category: 'Landmark', cost: 0 },
+    { name: 'teamLab Planets', category: 'Museum', cost: 32 },
+    { name: 'Tsukiji Outer Market', category: 'Restaurant', cost: 28 },
+    { name: 'Shinjuku Golden Gai', category: 'Entertainment', cost: 20 },
+    { name: 'Akihabara Electric Town', category: 'Entertainment', cost: 10 },
+  ],
+  paris: [
+    { name: 'Louvre Museum', category: 'Museum', cost: 22 },
+    { name: 'Eiffel Tower Summit', category: 'Landmark', cost: 35 },
+    { name: 'Musée d’Orsay', category: 'Museum', cost: 16 },
+    { name: 'Sainte-Chapelle', category: 'Historic', cost: 13 },
+    { name: 'Centre Pompidou', category: 'Entertainment', cost: 15 },
+    { name: 'Montmartre & Sacré-Cœur', category: 'Viewpoint', cost: 0 },
+  ],
+};
+
 
 export interface OverviewPageProps {
   trip: TripSummary;
@@ -49,21 +81,143 @@ export default function OverviewPage({
   const [generationStep, setGenerationStep] = useState<string | null>(null);
   const [agentNotes, setAgentNotes] = useState<string[]>([]);
 
-  // Fetch real plan notes from backend API
-  useEffect(() => {
-    if (trip?.id) {
-      api.plan
-        .get(trip.id)
-        .then((plan) => {
-          if (plan?.notes && plan.notes.length > 0) {
-            setAgentNotes(plan.notes);
+  // Manual "Plan it yourself" destination visit form state
+  const [manualDay, setManualDay] = useState<number>(1);
+  const [manualName, setManualName] = useState<string>('');
+  const [manualTime, setManualTime] = useState<string>('10:00');
+  const [manualCategory, setManualCategory] = useState<string>('Sightseeing');
+  const [manualCost, setManualCost] = useState<string>('15');
+  const [isSubmittingManual, setIsSubmittingManual] = useState<boolean>(false);
+  const [manualSuccessMsg, setManualSuccessMsg] = useState<string | null>(null);
+  const [manualStops, setManualStops] = useState<
+    Array<{ id?: string; day: number; name: string; time: string; cost: number; category: string }>
+  >([]);
+
+  const destKey = (trip?.destination || '').toLowerCase();
+  const suggestions = DESTINATION_SUGGESTIONS[destKey] || [
+    { name: 'City Center Historic Walk', category: 'Landmark', cost: 0 },
+    { name: 'Central Food Market', category: 'Restaurant', cost: 20 },
+    { name: 'National Art Museum', category: 'Museum', cost: 12 },
+    { name: 'Scenic Panoramic Viewpoint', category: 'Viewpoint', cost: 0 },
+  ];
+
+  const refreshPlanStops = useCallback(() => {
+    if (!trip?.id) return;
+    api.plan
+      .get(trip.id)
+      .then((plan) => {
+        if (plan?.notes && plan.notes.length > 0) {
+          setAgentNotes(plan.notes);
+        }
+        if (plan?.days) {
+          const list: Array<{ id?: string; day: number; name: string; time: string; cost: number; category: string }> = [];
+          for (const d of plan.days) {
+            for (const it of d.items || []) {
+              let tStr = '10:00 AM';
+              if (it.start_time) {
+                const timePart = String(it.start_time).includes('T')
+                  ? String(it.start_time).split('T')[1]?.substring(0, 5)
+                  : String(it.start_time).split(' ')[1]?.substring(0, 5);
+                if (timePart && /^\d{1,2}:\d{2}$/.test(timePart)) {
+                  const [hh, mm] = timePart.split(':');
+                  const h = parseInt(hh || '0', 10);
+                  const ampm = h >= 12 ? 'PM' : 'AM';
+                  const h12 = h % 12 === 0 ? 12 : h % 12;
+                  tStr = `${h12}:${mm} ${ampm}`;
+                }
+              }
+              list.push({
+                id: it.id,
+                day: d.day_index + 1,
+                name: it.place?.name || 'Scheduled Activity',
+                time: tStr,
+                cost: it.cost || 0,
+                category: it.place?.category || 'Sightseeing',
+              });
+            }
           }
-        })
-        .catch(() => {
-          // Initial plan not yet synthesized
-        });
-    }
+          setManualStops(list);
+        }
+      })
+      .catch(() => {});
   }, [trip?.id]);
+
+  useEffect(() => {
+    refreshPlanStops();
+  }, [refreshPlanStops]);
+
+  const handleAddManualStop = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!manualName.trim() || isSubmittingManual) return;
+    setIsSubmittingManual(true);
+    setManualSuccessMsg(null);
+
+    const costNum = parseFloat(manualCost) || 0;
+    const dayIdx = manualDay - 1;
+
+    try {
+      const [hoursStr, minutesStr] = manualTime.split(':');
+      const hours = parseInt(hoursStr || '10', 10);
+      const minutes = parseInt(minutesStr || '0', 10);
+      const endH = (hours + 2) % 24;
+
+      const baseDate = new Date(trip.start_date);
+      baseDate.setDate(baseDate.getDate() + dayIdx);
+      const dateStr = !isNaN(baseDate.getTime())
+        ? baseDate.toISOString().split('T')[0]
+        : new Date().toISOString().split('T')[0];
+
+      const startTime = `${dateStr}T${hours.toString().padStart(2, '0')}:${minutes.toString().padStart(2, '0')}:00`;
+      const endTime = `${dateStr}T${endH.toString().padStart(2, '0')}:${minutes.toString().padStart(2, '0')}:00`;
+
+      await api.plan.addItem(trip.id, {
+        day_index: dayIdx,
+        place_name: manualName.trim(),
+        category: manualCategory,
+        start_time: startTime,
+        end_time: endTime,
+        cost: costNum,
+      });
+
+      refreshPlanStops();
+      setManualSuccessMsg(`Added "${manualName.trim()}" to Day ${manualDay}!`);
+      setManualName('');
+
+      const nextHour = (hours + 2) % 24;
+      setManualTime(`${nextHour.toString().padStart(2, '0')}:${minutes.toString().padStart(2, '0')}`);
+      setTimeout(() => setManualSuccessMsg(null), 4000);
+    } catch {
+      // Offline fallback
+      setManualStops((prev) => [
+        ...prev,
+        {
+          id: `manual-${Date.now()}`,
+          day: manualDay,
+          name: manualName.trim(),
+          time: manualTime,
+          cost: costNum,
+          category: manualCategory,
+        },
+      ]);
+      setManualSuccessMsg(`Added "${manualName.trim()}" to Day ${manualDay}!`);
+      setManualName('');
+      setTimeout(() => setManualSuccessMsg(null), 4000);
+    } finally {
+      setIsSubmittingManual(false);
+    }
+  };
+
+  const handleDeleteManualStop = async (stopId?: string) => {
+    if (!stopId) return;
+    try {
+      if (!stopId.startsWith('manual-')) {
+        await api.plan.deleteItem(trip.id, stopId);
+      }
+    } catch {
+      // ignore
+    }
+    setManualStops((prev) => prev.filter((s) => s.id !== stopId));
+  };
 
   const submittedCount = members.filter((m) => m.submitted).length;
 
@@ -73,6 +227,7 @@ export default function OverviewPage({
     setCopied(true);
     setTimeout(() => setCopied(false), 2000);
   };
+
 
   const handleGenerate = async () => {
     setIsGenerating(true);
@@ -367,6 +522,293 @@ export default function OverviewPage({
         </div>
       </div>
 
+      {/* Plan It Yourself: Manual Destination Visit Form */}
+      {planMode === 'manual' && (
+        <div
+          style={{
+            border: `1.5px solid ${PINE}`,
+            borderRadius: 14,
+            padding: '20px 22px',
+            background: '#FAF6EE',
+            marginBottom: 24,
+            boxShadow: '0 2px 8px rgba(36,33,28,0.04)',
+          }}
+        >
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12, flexWrap: 'wrap', gap: 8 }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+              <MapPin size={18} color={PINE} />
+              <h3 style={{ margin: 0, ...SERIF, fontSize: 18, color: INK }}>
+                Plan It Yourself — Add Destination Visit
+              </h3>
+            </div>
+            <span style={{ fontSize: 12, color: PINE, fontWeight: 600, background: '#EEF3ED', padding: '2px 8px', borderRadius: 6 }}>
+              Manual Builder
+            </span>
+          </div>
+
+          <p style={{ margin: '0 0 16px', fontSize: 13, color: MUTED, lineHeight: 1.4 }}>
+            Manually enter your destination stops, sightseeing attractions, or restaurants.
+            Your stops will be plotted on the interactive route map and validated automatically.
+          </p>
+
+          <form onSubmit={handleAddManualStop} style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+            {/* Row 1: Day selection & Destination Name */}
+            <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 4, width: 110 }}>
+                <label style={{ fontSize: 11, fontWeight: 600, color: MUTED }}>Visit Day</label>
+                <select
+                  value={manualDay}
+                  onChange={(e) => setManualDay(parseInt(e.target.value, 10))}
+                  style={{
+                    padding: '9px 10px',
+                    borderRadius: 8,
+                    border: `1px solid ${BORDER}`,
+                    background: '#fff',
+                    fontSize: 13,
+                    outline: 'none',
+                    cursor: 'pointer',
+                  }}
+                >
+                  {Array.from({ length: Math.max(1, nightsCount + 1) }, (_, i) => i + 1).map((d) => (
+                    <option key={d} value={d}>
+                      Day {d}
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 4, flex: 2, minWidth: 200 }}>
+                <label style={{ fontSize: 11, fontWeight: 600, color: MUTED }}>
+                  Destination Visit / Venue Name
+                </label>
+                <input
+                  type="text"
+                  placeholder="e.g. Belém Tower, Louvre Museum, Senso-ji Temple..."
+                  value={manualName}
+                  onChange={(e) => setManualName(e.target.value)}
+                  required
+                  style={{
+                    padding: '9px 12px',
+                    borderRadius: 8,
+                    border: `1px solid ${BORDER}`,
+                    background: '#fff',
+                    fontSize: 13,
+                    outline: 'none',
+                  }}
+                />
+              </div>
+            </div>
+
+            {/* Quick Suggestions based on trip destination */}
+            {suggestions.length > 0 && (
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, alignItems: 'center' }}>
+                <span style={{ fontSize: 11, color: MUTED, fontWeight: 600 }}>Quick Add:</span>
+                {suggestions.map((sug) => (
+                  <button
+                    key={sug.name}
+                    type="button"
+                    onClick={() => {
+                      setManualName(sug.name);
+                      setManualCategory(sug.category);
+                      setManualCost(String(sug.cost));
+                    }}
+                    style={{
+                      fontSize: 11,
+                      padding: '3px 9px',
+                      borderRadius: 12,
+                      background: '#fff',
+                      border: `1px solid ${BORDER}`,
+                      color: INK,
+                      cursor: 'pointer',
+                    }}
+                  >
+                    + {sug.name}
+                  </button>
+                ))}
+              </div>
+            )}
+
+            {/* Row 2: Time, Category, Cost, Submit */}
+            <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'flex-end' }}>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 4, width: 110 }}>
+                <label style={{ fontSize: 11, fontWeight: 600, color: MUTED }}>Time Slot</label>
+                <input
+                  type="time"
+                  value={manualTime}
+                  onChange={(e) => setManualTime(e.target.value)}
+                  style={{
+                    padding: '8px 10px',
+                    borderRadius: 8,
+                    border: `1px solid ${BORDER}`,
+                    background: '#fff',
+                    fontSize: 13,
+                    outline: 'none',
+                  }}
+                />
+              </div>
+
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 4, flex: 1, minWidth: 130 }}>
+                <label style={{ fontSize: 11, fontWeight: 600, color: MUTED }}>Category</label>
+                <select
+                  value={manualCategory}
+                  onChange={(e) => setManualCategory(e.target.value)}
+                  style={{
+                    padding: '8px 10px',
+                    borderRadius: 8,
+                    border: `1px solid ${BORDER}`,
+                    background: '#fff',
+                    fontSize: 13,
+                    outline: 'none',
+                    cursor: 'pointer',
+                  }}
+                >
+                  <option value="Sightseeing">Sightseeing</option>
+                  <option value="Landmark">Landmark</option>
+                  <option value="Museum">Museum</option>
+                  <option value="Entertainment">Entertainment</option>
+                  <option value="Restaurant">Restaurant</option>
+                  <option value="Cafe">Cafe</option>
+                  <option value="Viewpoint">Viewpoint</option>
+                  <option value="Park">Park</option>
+                  <option value="Nightlife">Nightlife</option>
+                  <option value="Culture">Culture</option>
+                  <option value="Shopping">Shopping</option>
+                </select>
+              </div>
+
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 4, width: 90 }}>
+                <label style={{ fontSize: 11, fontWeight: 600, color: MUTED }}>Cost ($)</label>
+                <div style={{ position: 'relative' }}>
+                  <span style={{ position: 'absolute', left: 8, top: 8, fontSize: 13, color: MUTED }}>$</span>
+                  <input
+                    type="number"
+                    min="0"
+                    placeholder="0"
+                    value={manualCost}
+                    onChange={(e) => setManualCost(e.target.value)}
+                    style={{
+                      width: '100%',
+                      padding: '8px 8px 8px 20px',
+                      borderRadius: 8,
+                      border: `1px solid ${BORDER}`,
+                      background: '#fff',
+                      fontSize: 13,
+                      outline: 'none',
+                      boxSizing: 'border-box',
+                    }}
+                  />
+                </div>
+              </div>
+
+              <PrimaryButton
+                type="submit"
+                disabled={isSubmittingManual}
+                style={{ padding: '9px 18px', height: 38 }}
+              >
+                <Plus size={15} /> Add Visit
+              </PrimaryButton>
+            </div>
+          </form>
+
+          {manualSuccessMsg && (
+            <div
+              style={{
+                marginTop: 12,
+                padding: '8px 12px',
+                borderRadius: 8,
+                background: '#EEF5ED',
+                color: PINE,
+                fontSize: 13,
+                fontWeight: 500,
+                display: 'flex',
+                alignItems: 'center',
+                gap: 6,
+              }}
+            >
+              <Check size={14} /> {manualSuccessMsg}
+            </div>
+          )}
+
+          {/* Scheduled Destination Stops List */}
+          {manualStops.length > 0 && (
+            <div style={{ marginTop: 20, borderTop: `1px solid ${BORDER}`, paddingTop: 14 }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10, flexWrap: 'wrap', gap: 6 }}>
+                <span style={{ fontSize: 13, fontWeight: 600, color: INK }}>
+                  Scheduled Destination Stops ({manualStops.length}):
+                </span>
+                <button
+                  type="button"
+                  onClick={() => setActive('itinerary')}
+                  style={{
+                    background: 'transparent',
+                    border: 'none',
+                    color: PINE,
+                    fontSize: 12,
+                    fontWeight: 600,
+                    cursor: 'pointer',
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: 4,
+                  }}
+                >
+                  View Route Map & Schedule <ArrowRight size={13} />
+                </button>
+              </div>
+
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 6, maxHeight: 180, overflowY: 'auto' }}>
+                {manualStops.map((st, idx) => (
+                  <div
+                    key={st.id || idx}
+                    style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'space-between',
+                      padding: '8px 12px',
+                      borderRadius: 8,
+                      background: '#fff',
+                      border: `1px solid ${BORDER}`,
+                      fontSize: 12,
+                    }}
+                  >
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                      <span style={{ fontWeight: 600, color: PINE, minWidth: 44 }}>Day {st.day}</span>
+                      <span style={{ color: MUTED, minWidth: 68, display: 'flex', alignItems: 'center', gap: 3 }}>
+                        <Clock size={11} /> {st.time}
+                      </span>
+                      <span style={{ fontWeight: 500, color: INK }}>{st.name}</span>
+                      <span style={{ fontSize: 10, color: MUTED, background: '#FAF6EE', padding: '1px 6px', borderRadius: 10 }}>
+                        {st.category}
+                      </span>
+                    </div>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                      <span style={{ color: INK, fontWeight: 600 }}>
+                        {st.cost > 0 ? `$${st.cost}` : 'Free'}
+                      </span>
+                      {st.id && (
+                        <button
+                          type="button"
+                          onClick={() => handleDeleteManualStop(st.id)}
+                          title="Remove visit"
+                          style={{
+                            background: 'transparent',
+                            border: 'none',
+                            color: MUTED,
+                            cursor: 'pointer',
+                            padding: 2,
+                          }}
+                        >
+                          <Trash2 size={13} />
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+
       {/* Propose-Validate Loop Status Indicator (if generating) */}
       {isGenerating && (
         <div
@@ -395,23 +837,28 @@ export default function OverviewPage({
 
       {/* Action Button */}
       <div style={{ display: 'flex', alignItems: 'center', gap: 14 }}>
-        <PrimaryButton
-          onClick={handleGenerate}
-          disabled={isGenerating}
-          style={{ padding: '12px 24px' }}
-        >
-          {isGenerating ? (
-            'Synthesizing Itinerary...'
-          ) : planMode === 'ai' ? (
-            <>
-              <Sparkles size={16} /> Generate Itinerary
-            </>
-          ) : (
-            <>
-              <MapPin size={16} /> Start Building Schedule
-            </>
-          )}
-        </PrimaryButton>
+        {planMode === 'ai' ? (
+          <PrimaryButton
+            onClick={handleGenerate}
+            disabled={isGenerating}
+            style={{ padding: '12px 24px' }}
+          >
+            {isGenerating ? (
+              'Synthesizing Itinerary...'
+            ) : (
+              <>
+                <Sparkles size={16} /> Generate Itinerary
+              </>
+            )}
+          </PrimaryButton>
+        ) : (
+          <PrimaryButton
+            onClick={() => setActive('itinerary')}
+            style={{ padding: '12px 24px' }}
+          >
+            <MapPin size={16} /> {manualStops.length > 0 ? `View Route Map (${manualStops.length} stops)` : 'Open Full Itinerary'}
+          </PrimaryButton>
+        )}
 
         {!isCreator && (
           <span style={{ fontSize: 13, color: MUTED }}>
@@ -420,51 +867,15 @@ export default function OverviewPage({
         )}
       </div>
 
-      {/* Agent Tradeoffs Explanations Card */}
-      {agentNotes.length > 0 && (
-        <div
-          style={{
-            marginTop: 28,
-            padding: '18px 20px',
-            borderRadius: 12,
-            background: '#fff',
-            border: `1px solid ${BORDER}`,
-          }}
-        >
-          <span
-            style={{
-              fontSize: 13,
-              fontWeight: 600,
-              textTransform: 'uppercase',
-              letterSpacing: '0.04em',
-              color: MUTED,
-              display: 'block',
-              marginBottom: 10,
-            }}
-          >
-            Agent Self-Correction & Tradeoff Explanations:
-          </span>
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-            {agentNotes.map((note, idx) => (
-              <div
-                key={idx}
-                style={{
-                  display: 'flex',
-                  alignItems: 'flex-start',
-                  gap: 8,
-                  fontSize: 13,
-                  color: INK,
-                }}
-              >
-                <CheckCircle2
-                  size={15}
-                  color={PINE}
-                  style={{ flexShrink: 0, marginTop: 2 }}
-                />
-                <span>{note}</span>
-              </div>
-            ))}
-          </div>
+
+
+      {/* Agent Self-Correction & Tradeoff Explanations (Shown in 'ai' plan mode, removed in 'manual' plan mode) */}
+      {planMode === 'ai' && agentNotes.length > 0 && (
+        <div style={{ marginTop: 28 }}>
+          <AgentExplanations
+            notes={agentNotes}
+            title="Agent Self-Correction & Tradeoff Explanations"
+          />
         </div>
       )}
 

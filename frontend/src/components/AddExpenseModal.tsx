@@ -18,10 +18,10 @@ export default function AddExpenseModal({
 }: AddExpenseModalProps) {
   const [desc, setDesc] = useState('');
   const [amount, setAmount] = useState('');
-  const [paidBy, setPaidBy] = useState(members[0]?.name || 'Alice');
+  const [paidBy, setPaidBy] = useState(members[0]?.id || '');
   const [category, setCategory] = useState('Food');
   const [splitBetween, setSplitBetween] = useState<string[]>(
-    members.map((m) => m.name),
+    members.map((m) => m.id),
   );
   const [error, setError] = useState<string | null>(null);
 
@@ -130,6 +130,8 @@ export default function AddExpenseModal({
           <button
             type="button"
             onClick={onClose}
+            aria-label="Close expense modal"
+            title="Close"
             style={{
               border: 'none',
               background: 'transparent',
@@ -255,7 +257,7 @@ export default function AddExpenseModal({
                 }}
               >
                 {members.map((m) => (
-                  <option key={m.id} value={m.name}>
+                  <option key={m.id} value={m.id}>
                     {m.name}
                   </option>
                 ))}
@@ -311,12 +313,12 @@ export default function AddExpenseModal({
             </label>
             <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
               {members.map((m) => {
-                const isSelected = splitBetween.includes(m.name);
+                const isSelected = splitBetween.includes(m.id);
                 return (
                   <button
                     key={m.id}
                     type="button"
-                    onClick={() => toggleMember(m.name)}
+                    onClick={() => toggleMember(m.id)}
                     style={{
                       padding: '6px 12px',
                       borderRadius: 8,

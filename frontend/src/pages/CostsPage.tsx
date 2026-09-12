@@ -57,10 +57,11 @@ export default function CostsPage({
 
   const balances = members.map((m) => {
     const paid = expenses
-      .filter((e) => e.paidBy.toLowerCase() === m.name.toLowerCase() || e.paidBy.toLowerCase() === m.id.toLowerCase())
+      .filter((e) => e.paidBy === m.id)
       .reduce((s, e) => s + e.amount, 0);
     return {
       name: m.name,
+      id: m.id,
       paid,
       net: Math.round((paid - perPerson) * 100) / 100,
     };
@@ -98,6 +99,11 @@ export default function CostsPage({
     if (creditor.isOwed < 0.01) cIdx++;
   }
 
+  const getMemberName = (id: string): string => {
+    const member = members.find((m) => m.id === id);
+    return member?.name || id;
+  };
+
   const handleAddExpense = async (expense: ExpenseItem) => {
     try {
       await api.expenses.create(tripId, {
@@ -105,7 +111,7 @@ export default function CostsPage({
         amount: expense.amount,
         description: expense.desc,
         category: expense.category || 'activity',
-        split_between: expense.splitBetween || members.map((m) => m.name),
+        split_between: expense.splitBetween || members.map((m) => m.id),
       });
       loadExpenses();
     } catch {
@@ -250,7 +256,7 @@ export default function CostsPage({
                   {e.desc}
                 </span>
                 <span style={{ fontSize: 12, color: MUTED }}>
-                  Paid by <strong>{e.paidBy}</strong> {e.category ? `• ${e.category}` : ''}
+                  Paid by <strong>{getMemberName(e.paidBy)}</strong> {e.category ? `• ${e.category}` : ''}
                 </span>
               </div>
               <span style={{ fontSize: 15, fontWeight: 600, color: INK }}>

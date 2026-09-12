@@ -1,8 +1,6 @@
-"""
-Itinerary planning API endpoints: Generation, Retrieval, Validation, and Item Editing.
-"""
-
+import math
 import uuid
+from datetime import datetime
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
 from sqlmodel import Session, col, select
@@ -24,12 +22,11 @@ from app.models.schema import (
     UpdatePlanItemRequest,
     ValidationResult,
     ValidationStatus,
+    utc_now,
 )
-from app.services.agent_planner import (
-    AgentPlanner,
-    build_day_dates,
-    create_plan_response,
-)
+from app.services.agent_planner import AgentPlanner, create_plan_response
+from app.services.places_service import get_or_create_places_for_destination
+from app.services.proposer import build_day_dates
 from app.validators.budget_validator import check_budget
 from app.validators.open_hours_validator import check_open_hours
 from app.validators.travel_validator import check_travel_time
@@ -149,15 +146,111 @@ def add_plan_item(
     """Add a custom plan item to the latest plan (Always allow all edits)."""
     trip = session.get(Trip, trip_id)
     if not trip:
-        raise HTTPException(status_code=404, detail="Trip not found")
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={
+                "code": "TRIP_NOT_FOUND",
+                "message": f"Trip '{trip_id}' not found.",
+            },
+        )
+
+    if req.day_index < 0:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={
+                "code": "INVALID_DAY_INDEX",
+                "message": "day_index must be a non-negative integer.",
+            },
+        )
+
+    if req.end_time <= req.start_time:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={
+                "code": "INVALID_TIME_RANGE",
+                "message": "end_time must be after start_time.",
+            },
+        )
+
+    if req.cost < 0:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={
+                "code": "INVALID_COST",
+                "message": "cost cannot be negative.",
+            },
+        )
 
     plan = session.exec(
         select(Plan).where(Plan.trip_id == trip_id).order_by(col(Plan.version).desc())
     ).first()
     if not plan:
-        raise HTTPException(
-            status_code=400, detail="Plan must be generated before adding items"
+        plan = Plan(
+            id=str(uuid.uuid4()),
+            trip_id=trip.id,
+            version=1,
+            validation_status=ValidationStatus.VALID,
+            notes=["Manual itinerary created by user."],
+            created_at=utc_now(),
         )
+        session.add(plan)
+        session.commit()
+        session.refresh(plan)
+
+        trip.status = TripStatus.PLANNED
+        session.add(trip)
+        session.commit()
+
+    # Anchor start_time and end_time to the actual trip day date
+    day_dates = build_day_dates(trip.start_date, trip.end_date)
+    if 0 <= req.day_index < len(day_dates):
+        target_date = day_dates[req.day_index]
+        item_start_time = datetime.combine(target_date, req.start_time.time())
+        item_end_time = datetime.combine(target_date, req.end_time.time())
+    else:
+        item_start_time = req.start_time
+        item_end_time = req.end_time
+
+    # Resolve geographic coordinates (lat, lng)
+    resolved_lat = req.lat
+    resolved_lng = req.lng
+
+    candidate_places = get_or_create_places_for_destination(session, trip.destination)
+
+    # If coordinates are missing (0.0 or None), resolve from destination catalog or city coordinates
+    if (
+        not resolved_lat
+        or not resolved_lng
+        or (resolved_lat == 0.0 and resolved_lng == 0.0)
+    ):
+        norm_name = req.place_name.lower().strip()
+        matched = next(
+            (
+                p
+                for p in candidate_places
+                if norm_name in p.name.lower() or p.name.lower() in norm_name
+            ),
+            None,
+        )
+        if matched and matched.lat and matched.lng:
+            resolved_lat = matched.lat
+            resolved_lng = matched.lng
+            if not req.category or req.category == "attraction":
+                req.category = matched.category
+        elif candidate_places:
+            # Anchor near destination center with realistic spatial distribution
+            base_p = candidate_places[0]
+            existing_items = session.exec(
+                select(PlanItem).where(PlanItem.plan_id == plan.id)
+            ).all()
+            stop_num = len(existing_items) + 1
+            angle = (stop_num * 1.35) % (2 * math.pi)
+            dist = 0.008 + (stop_num % 4) * 0.004
+            resolved_lat = round(base_p.lat + math.sin(angle) * dist, 6)
+            resolved_lng = round(base_p.lng + math.cos(angle) * dist, 6)
+        else:
+            resolved_lat = 38.7169
+            resolved_lng = -9.1399
 
     # Create or find place
     place_id = f"custom_{str(uuid.uuid4())[:8]}"
@@ -165,8 +258,8 @@ def add_plan_item(
         place_id=place_id,
         name=req.place_name,
         category=req.category,
-        lat=req.lat or 0.0,
-        lng=req.lng or 0.0,
+        lat=resolved_lat,
+        lng=resolved_lng,
         est_cost=req.cost,
     )
     session.add(place)
@@ -176,8 +269,8 @@ def add_plan_item(
         plan_id=plan.id,
         place_id=place.place_id,
         day_index=req.day_index,
-        start_time=req.start_time,
-        end_time=req.end_time,
+        start_time=item_start_time,
+        end_time=item_end_time,
         cost=req.cost,
     )
     session.add(item)
@@ -206,7 +299,44 @@ def update_plan_item(
     """Directly edit an existing itinerary stop (Always allow all edits)."""
     item = session.get(PlanItem, item_id)
     if not item:
-        raise HTTPException(status_code=404, detail=f"PlanItem '{item_id}' not found")
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={
+                "code": "PLAN_ITEM_NOT_FOUND",
+                "message": f"PlanItem '{item_id}' not found.",
+            },
+        )
+
+    if req.day_index is not None and req.day_index < 0:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={
+                "code": "INVALID_DAY_INDEX",
+                "message": "day_index must be a non-negative integer.",
+            },
+        )
+
+    if req.cost is not None and req.cost < 0:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={
+                "code": "INVALID_COST",
+                "message": "cost cannot be negative.",
+            },
+        )
+
+    if (
+        req.start_time is not None
+        and req.end_time is not None
+        and req.end_time <= req.start_time
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={
+                "code": "INVALID_TIME_RANGE",
+                "message": "end_time must be after start_time.",
+            },
+        )
 
     place = session.get(Place, item.place_id)
 
@@ -258,7 +388,13 @@ def delete_plan_item(
     """Remove a plan item from the itinerary."""
     item = session.get(PlanItem, item_id)
     if not item:
-        raise HTTPException(status_code=404, detail=f"PlanItem '{item_id}' not found")
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={
+                "code": "PLAN_ITEM_NOT_FOUND",
+                "message": f"PlanItem '{item_id}' not found.",
+            },
+        )
     session.delete(item)
     session.commit()
     return None
@@ -275,7 +411,13 @@ def validate_current_plan(
     """
     trip = session.get(Trip, trip_id)
     if not trip:
-        raise HTTPException(status_code=404, detail="Trip not found")
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={
+                "code": "TRIP_NOT_FOUND",
+                "message": f"Trip '{trip_id}' not found.",
+            },
+        )
 
     plan = session.exec(
         select(Plan).where(Plan.trip_id == trip_id).order_by(col(Plan.version).desc())
@@ -314,22 +456,41 @@ def refine_plan(
     """
     trip = session.get(Trip, trip_id)
     if not trip:
-        raise HTTPException(status_code=404, detail="Trip not found")
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={
+                "code": "TRIP_NOT_FOUND",
+                "message": f"Trip '{trip_id}' not found.",
+            },
+        )
+
+    instruction = req.instruction.strip()
+    if not instruction:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={
+                "code": "INVALID_INSTRUCTION",
+                "message": "Refinement instruction cannot be empty.",
+            },
+        )
 
     plan = session.exec(
         select(Plan).where(Plan.trip_id == trip_id).order_by(col(Plan.version).desc())
     ).first()
     if not plan:
         raise HTTPException(
-            status_code=400,
-            detail="A plan must be generated first before refining.",
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={
+                "code": "PLAN_NOT_FOUND",
+                "message": "A plan must be generated first before refining.",
+            },
         )
 
     return AgentPlanner.refine_plan(
         session=session,
         trip=trip,
         current_plan=plan,
-        instruction=req.instruction,
+        instruction=instruction,
         user_id=req.user_id,
     )
 
@@ -345,15 +506,24 @@ def export_plan_ics(
     """
     trip = session.get(Trip, trip_id)
     if not trip:
-        raise HTTPException(status_code=404, detail="Trip not found")
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={
+                "code": "TRIP_NOT_FOUND",
+                "message": f"Trip '{trip_id}' not found.",
+            },
+        )
 
     plan = session.exec(
         select(Plan).where(Plan.trip_id == trip_id).order_by(col(Plan.version).desc())
     ).first()
     if not plan:
         raise HTTPException(
-            status_code=404,
-            detail="No plan exists yet to export.",
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={
+                "code": "PLAN_NOT_FOUND",
+                "message": "No plan exists yet to export.",
+            },
         )
 
     ics_content = AgentPlanner.generate_ics_calendar(

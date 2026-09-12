@@ -17,6 +17,9 @@ from app.core.security import (
 from app.models.schema import (
     AuthResponse,
     LoginRequest,
+    Place,
+    Plan,
+    PlanItem,
     Trip,
     TripStatus,
     User,
@@ -111,8 +114,6 @@ def get_admin_overview(
     active_trips = [t for t in trips if t.status != TripStatus.COMPLETED]
     creators_count = len(users)
 
-    from app.models.schema import Plan
-
     plans = session.exec(select(Plan)).all()
     llm_calls = sum(p.version for p in plans) if plans else 0
     total_spend = round(llm_calls * 0.05, 2)
@@ -127,8 +128,6 @@ def get_admin_overview(
     )
 
     # Cache hit rate estimate (mock dynamic)
-    from app.models.schema import Place
-
     places_count = len(session.exec(select(Place)).all())
     cache_hit_rate = 100 if places_count == 0 else min(95, 40 + (places_count * 2))
 
@@ -228,12 +227,20 @@ def update_trip_status(
     """Update trip moderation status (active, flagged, closed)."""
     trip = session.get(Trip, trip_id)
     if not trip:
-        raise HTTPException(status_code=404, detail="Trip not found")
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={
+                "code": "TRIP_NOT_FOUND",
+                "message": f"Trip '{trip_id}' not found.",
+            },
+        )
 
     if req.status == "closed":
         trip.status = TripStatus.COMPLETED
     elif req.status == "active":
         trip.status = TripStatus.IN_PROGRESS
+    elif req.status == "flagged":
+        trip.status = TripStatus.FLAGGED
 
     session.add(trip)
     session.commit()
@@ -250,7 +257,13 @@ def delete_trip_admin(
     """Administrative force deletion of a trip."""
     trip = session.get(Trip, trip_id)
     if not trip:
-        raise HTTPException(status_code=404, detail="Trip not found")
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={
+                "code": "TRIP_NOT_FOUND",
+                "message": f"Trip '{trip_id}' not found.",
+            },
+        )
     session.delete(trip)
     session.commit()
     return {"status": "deleted", "trip_id": trip_id}
@@ -288,8 +301,6 @@ def get_api_usage(
     admin: User = Depends(get_current_admin_user),
 ):
     """External API consumption and quota tracking."""
-    from app.models.schema import Place, Plan, PlanItem
-
     places_count = len(session.exec(select(Place)).all())
     # Estimate distance matrix calls: roughly proportional to plan items
     plan_items_count = len(session.exec(select(PlanItem)).all())
@@ -355,7 +366,7 @@ def get_system_health(
         SystemHealthNode(
             name="Gemini LLM Service",
             status="up",
-            detail="Model gemini-2.5-flash operational · ~1.8s avg",
+            detail="Model gemini-3.6-flash operational · ~1.8s avg",
             latency_ms=1800.0,
         ),
     ]

@@ -232,7 +232,6 @@ describe('Frontend RBAC & Route Middleware Guards', () => {
     });
 
     it('shows Manage Trip button for trip creators', async () => {
-      vi.spyOn(apiModule, 'getAuthToken').mockReturnValue('valid-creator-token');
       vi.spyOn(apiModule.api.auth, 'login').mockResolvedValueOnce({
         token: 'valid-creator-token',
         user: { id: 'alice', email: 'alice@example.com', name: 'Alice' },

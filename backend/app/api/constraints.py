@@ -28,6 +28,15 @@ def submit_constraint(
             },
         )
 
+    if req.budget_per_day <= 0:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={
+                "code": "INVALID_BUDGET",
+                "message": "budget_per_day must be greater than 0.",
+            },
+        )
+
     # Ensure member is included in trip.member_ids
     if req.user_id not in trip.member_ids:
         trip.member_ids = list(trip.member_ids) + [req.user_id]

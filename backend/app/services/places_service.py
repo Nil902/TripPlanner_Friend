@@ -3,6 +3,7 @@ Places service for querying and caching candidate venues.
 """
 
 import logging
+import time
 from typing import TypedDict
 
 import httpx
@@ -106,6 +107,38 @@ DESTINATION_CATALOG: dict[str, list[CatalogItem]] = {
             "est_cost": 0.0,
             "hours": ("0900", "2200"),
         },
+        {
+            "name": "LX Factory Market & Entertainment",
+            "category": "entertainment",
+            "lat": 38.7037,
+            "lng": -9.1789,
+            "est_cost": 0.0,
+            "hours": ("1000", "2300"),
+        },
+        {
+            "name": "Fado Museum Lisbon",
+            "category": "museum",
+            "lat": 38.7100,
+            "lng": -9.1305,
+            "est_cost": 5.0,
+            "hours": ("1000", "1800"),
+        },
+        {
+            "name": "Ribeira das Naus Promenade",
+            "category": "viewpoint",
+            "lat": 38.7077,
+            "lng": -9.1395,
+            "est_cost": 0.0,
+            "hours": ("0000", "2359"),
+        },
+        {
+            "name": "ZDB Gallery & Bar",
+            "category": "entertainment",
+            "lat": 38.7188,
+            "lng": -9.1402,
+            "est_cost": 8.0,
+            "hours": ("1400", "0200"),
+        },
     ],
     "tokyo": [
         {
@@ -172,6 +205,30 @@ DESTINATION_CATALOG: dict[str, list[CatalogItem]] = {
             "est_cost": 0.0,
             "hours": ("0000", "2359"),
         },
+        {
+            "name": "Shinjuku Golden Gai (Nightlife Alley)",
+            "category": "entertainment",
+            "lat": 35.6938,
+            "lng": 139.7025,
+            "est_cost": 20.0,
+            "hours": ("1800", "0400"),
+        },
+        {
+            "name": "Akihabara Electric Town",
+            "category": "entertainment",
+            "lat": 35.7023,
+            "lng": 139.7745,
+            "est_cost": 10.0,
+            "hours": ("1000", "2100"),
+        },
+        {
+            "name": "Ueno Park & Zoo",
+            "category": "park",
+            "lat": 35.7143,
+            "lng": 139.7742,
+            "est_cost": 6.0,
+            "hours": ("0900", "1700"),
+        },
     ],
     "paris": [
         {
@@ -230,6 +287,30 @@ DESTINATION_CATALOG: dict[str, list[CatalogItem]] = {
             "est_cost": 0.0,
             "hours": ("0600", "2230"),
         },
+        {
+            "name": "Centre Pompidou",
+            "category": "entertainment",
+            "lat": 48.8607,
+            "lng": 2.3523,
+            "est_cost": 15.0,
+            "hours": ("1100", "2100"),
+        },
+        {
+            "name": "Luxembourg Gardens",
+            "category": "park",
+            "lat": 48.8462,
+            "lng": 2.3372,
+            "est_cost": 0.0,
+            "hours": ("0730", "2130"),
+        },
+        {
+            "name": "Le Marais Wine Bar",
+            "category": "entertainment",
+            "lat": 48.8580,
+            "lng": 2.3610,
+            "est_cost": 25.0,
+            "hours": ("1700", "0100"),
+        },
     ],
 }
 
@@ -248,27 +329,54 @@ def build_opening_hours_periods(open_hhmm: str, close_hhmm: str):
 
 
 def fetch_from_google_places_api(destination: str) -> list[CatalogItem]:
-    """Query Google Places API (New) for candidate attractions and dining."""
+    """Query Google Places API (New) for candidate attractions and dining.
+
+    Includes retry with exponential backoff for 429/5xx errors.
+    """
     if not settings.GOOGLE_MAPS_API_KEY:
         return []
 
-    try:
-        url = "https://places.googleapis.com/v1/places:searchText"
-        headers = {
-            "Content-Type": "application/json",
-            "X-Goog-Api-Key": settings.GOOGLE_MAPS_API_KEY,
-            "X-Goog-FieldMask": (
-                "places.id,places.displayName,places.primaryType,"
-                "places.location,places.regularOpeningHours,places.priceLevel"
-            ),
-        }
-        body = {
-            "textQuery": f"top attractions, museums, and restaurants in {destination}",
-            "maxResultCount": 10,
-        }
-        with httpx.Client(timeout=4.0) as client:
-            resp = client.post(url, json=body, headers=headers)
-            if resp.status_code == 200:
+    url = "https://places.googleapis.com/v1/places:searchText"
+    headers = {
+        "Content-Type": "application/json",
+        "X-Goog-Api-Key": settings.GOOGLE_MAPS_API_KEY,
+        "X-Goog-FieldMask": (
+            "places.id,places.displayName,places.primaryType,"
+            "places.location,places.regularOpeningHours,places.priceLevel"
+        ),
+    }
+    body = {
+        "textQuery": f"top attractions, museums, and restaurants in {destination}",
+        "maxResultCount": 10,
+    }
+
+    max_retries = 3
+    last_exc: Exception | None = None
+
+    for attempt in range(max_retries):
+        try:
+            with httpx.Client(timeout=8.0) as client:
+                resp = client.post(url, json=body, headers=headers)
+
+                if resp.status_code == 429 or resp.status_code >= 500:
+                    last_exc = RuntimeError(
+                        f"Google Places API returned {resp.status_code}"
+                    )
+                    wait = 1.5 * (2**attempt)
+                    logger.warning(
+                        f"Google Places API {resp.status_code}, retrying in {wait:.1f}s "
+                        f"(attempt {attempt + 1}/{max_retries})"
+                    )
+                    time.sleep(wait)
+                    continue
+
+                if resp.status_code != 200:
+                    logger.warning(
+                        f"Google Places API returned {resp.status_code}: "
+                        f"{resp.text[:200]}"
+                    )
+                    return []
+
                 data = resp.json()
                 items: list[CatalogItem] = []
                 price_map = {
@@ -318,11 +426,22 @@ def fetch_from_google_places_api(destination: str) -> list[CatalogItem]:
                         f"Retrieved {len(items)} places from Google Places API for {destination}"
                     )
                     return items
-    except Exception as exc:
-        logger.warning(
-            f"Google Places API query failed ({exc}). Falling back to cached catalog."
-        )
+                return []
 
+        except httpx.TimeoutException as exc:
+            last_exc = exc
+            wait = 1.5 * (2**attempt)
+            logger.warning(
+                f"Google Places API timeout (attempt {attempt + 1}/{max_retries}), "
+                f"retrying in {wait:.1f}s"
+            )
+            time.sleep(wait)
+        except httpx.HTTPError as exc:
+            last_exc = exc
+            logger.warning(f"Google Places API HTTP error: {exc}")
+            return []
+
+    logger.warning(f"Google Places API failed after {max_retries} attempts: {last_exc}")
     return []
 
 
@@ -331,21 +450,43 @@ def fetch_google_distance_matrix(
     destination: tuple[float, float],
     mode: str = "transit",
 ) -> int | None:
-    """Fetch transit travel time in minutes from Google Distance Matrix API."""
+    """Fetch transit travel time in minutes from Google Distance Matrix API.
+
+    Includes retry with exponential backoff for 429/5xx errors.
+    """
     if not settings.GOOGLE_MAPS_API_KEY:
         return None
 
-    try:
-        url = "https://maps.googleapis.com/maps/api/distancematrix/json"
-        params = {
-            "origins": f"{origin[0]},{origin[1]}",
-            "destinations": f"{destination[0]},{destination[1]}",
-            "mode": mode,
-            "key": settings.GOOGLE_MAPS_API_KEY,
-        }
-        with httpx.Client(timeout=3.0) as client:
-            resp = client.get(url, params=params)
-            if resp.status_code == 200:
+    url = "https://maps.googleapis.com/maps/api/distancematrix/json"
+    params = {
+        "origins": f"{origin[0]},{origin[1]}",
+        "destinations": f"{destination[0]},{destination[1]}",
+        "mode": mode,
+        "key": settings.GOOGLE_MAPS_API_KEY,
+    }
+
+    max_retries = 3
+
+    for attempt in range(max_retries):
+        try:
+            with httpx.Client(timeout=5.0) as client:
+                resp = client.get(url, params=params)
+
+                if resp.status_code == 429 or resp.status_code >= 500:
+                    wait = 1.5 * (2**attempt)
+                    logger.warning(
+                        f"Google Distance Matrix {resp.status_code}, retrying in {wait:.1f}s "
+                        f"(attempt {attempt + 1}/{max_retries})"
+                    )
+                    time.sleep(wait)
+                    continue
+
+                if resp.status_code != 200:
+                    logger.warning(
+                        f"Google Distance Matrix returned {resp.status_code}"
+                    )
+                    return None
+
                 data = resp.json()
                 rows = data.get("rows", [])
                 if rows:
@@ -353,9 +494,20 @@ def fetch_google_distance_matrix(
                     if elements and elements[0].get("status") == "OK":
                         duration_sec = elements[0].get("duration", {}).get("value", 0)
                         return int(max(1, round(float(duration_sec) / 60)))
-    except Exception as exc:
-        logger.warning(f"Google Distance Matrix query failed ({exc}).")
+                return None
 
+        except httpx.TimeoutException:
+            wait = 1.5 * (2**attempt)
+            logger.warning(
+                f"Google Distance Matrix timeout (attempt {attempt + 1}/{max_retries}), "
+                f"retrying in {wait:.1f}s"
+            )
+            time.sleep(wait)
+        except httpx.HTTPError as exc:
+            logger.warning(f"Google Distance Matrix HTTP error: {exc}")
+            return None
+
+    logger.warning(f"Google Distance Matrix failed after {max_retries} attempts")
     return None
 
 

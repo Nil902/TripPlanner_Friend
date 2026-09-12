@@ -122,6 +122,8 @@ export default function JoinModal({
           <button
             type="button"
             onClick={onClose}
+            aria-label="Close join modal"
+            title="Close"
             style={{
               border: 'none',
               background: 'transparent',

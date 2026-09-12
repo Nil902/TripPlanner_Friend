@@ -26,6 +26,7 @@ class TripStatus(StrEnum):
     PLANNED = "planned"
     IN_PROGRESS = "in_progress"
     COMPLETED = "completed"
+    FLAGGED = "flagged"
 
 
 class ValidationStatus(StrEnum):

@@ -142,6 +142,8 @@ export default function RebalanceModal({
           <button
             type="button"
             onClick={onClose}
+            aria-label="Close rebalance modal"
+            title="Close"
             style={{
               border: 'none',
               background: 'transparent',

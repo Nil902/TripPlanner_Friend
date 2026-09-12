@@ -493,4 +493,68 @@ describe('App Component Journeys', () => {
     expect(screen.getByText(/System Administration/i)).toBeInTheDocument();
     expect(window.location.pathname).toBe('/admin');
   });
+
+  it('hides Agent Self-Correction & Tradeoff Explanations when Plan It Yourself is chosen and displays them when Let AI Plan It is chosen', async () => {
+    vi.spyOn(api.plan, 'get').mockResolvedValue({
+      id: 'plan-1',
+      trip_id: 'trip-lisbon-202',
+      version: 1,
+      validation_status: 'valid',
+      days: [],
+      notes: [
+        'Iteration 1 rejected by validators: [budget_exceeded] Alice exceeds budget by $30. Self-correcting candidate itinerary...',
+        'Iteration 2: All deterministic validations passed strictly (0 budget warnings, 0 travel warnings).',
+      ],
+      created_at: new Date().toISOString(),
+    });
+
+    localStorage.setItem(
+      'ag_guest_session',
+      JSON.stringify({
+        tripId: 'trip-lisbon-202',
+        memberId: 'guest-plan-mode-test',
+        name: 'Mode Tester',
+        initials: 'MT',
+      }),
+    );
+
+    render(<App />);
+
+    // Initially in 'ai' mode with notes loaded from api.plan.get
+    await waitFor(() => {
+      expect(
+        screen.getByText('Agent Self-Correction & Tradeoff Explanations'),
+      ).toBeInTheDocument();
+    });
+
+    // In 'ai' mode, organized cards are visible
+    expect(screen.getByText('Resolved Constraint Conflict')).toBeInTheDocument();
+    expect(screen.getByText('Optimal Schedule Validated')).toBeInTheDocument();
+
+    // Now click "Plan it yourself" option
+    const manualOption = screen.getByText(/Plan it yourself/i);
+    fireEvent.click(manualOption);
+
+    // Agent Self-Correction & Tradeoff Explanations MUST be removed
+    expect(
+      screen.queryByText('Agent Self-Correction & Tradeoff Explanations'),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByText('Resolved Constraint Conflict'),
+    ).not.toBeInTheDocument();
+
+    // Manual destination form is visible
+    expect(
+      screen.getByText(/Plan It Yourself — Add Destination Visit/i),
+    ).toBeInTheDocument();
+
+    // Switch back to "Let the AI plan it"
+    const aiOption = screen.getByText(/Let the AI plan it/i);
+    fireEvent.click(aiOption);
+
+    // Explanations should reappear
+    expect(
+      screen.getByText('Agent Self-Correction & Tradeoff Explanations'),
+    ).toBeInTheDocument();
+  });
 });

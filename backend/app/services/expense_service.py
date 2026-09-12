@@ -3,8 +3,17 @@ Expense calculation and greedy settle-up debt simplification service.
 """
 
 from collections import defaultdict
+from dataclasses import dataclass
 
 from app.models.schema import DebtTransfer, Expense, SettleUpReport, UserBalanceSummary
+
+
+@dataclass
+class _BalanceTarget:
+    """Mutable balance tracker used by the greedy settle-up algorithm."""
+
+    amount: float
+    user_id: str
 
 
 def calculate_settle_up(
@@ -33,8 +42,8 @@ def calculate_settle_up(
 
     all_users = set(total_paid.keys()).union(set(total_share.keys()))
     user_balances: list[UserBalanceSummary] = []
-    debtors: list[list] = []  # [-balance, user_id]
-    creditors: list[list] = []  # [balance, user_id]
+    debtors: list[_BalanceTarget] = []
+    creditors: list[_BalanceTarget] = []
 
     for uid in sorted(all_users):
         paid = round(total_paid[uid], 2)
@@ -49,13 +58,13 @@ def calculate_settle_up(
             )
         )
         if net < -0.01:
-            debtors.append([-net, uid])
+            debtors.append(_BalanceTarget(amount=-net, user_id=uid))
         elif net > 0.01:
-            creditors.append([net, uid])
+            creditors.append(_BalanceTarget(amount=net, user_id=uid))
 
     # Sort descending by magnitude of debt/credit
-    debtors.sort(key=lambda x: x[0], reverse=True)
-    creditors.sort(key=lambda x: x[0], reverse=True)
+    debtors.sort(key=lambda x: x.amount, reverse=True)
+    creditors.sort(key=lambda x: x.amount, reverse=True)
 
     transfers: list[DebtTransfer] = []
     d_idx = 0
@@ -63,24 +72,24 @@ def calculate_settle_up(
 
     # Greedy debt matching
     while d_idx < len(debtors) and c_idx < len(creditors):
-        debtor_amt, debtor_id = debtors[d_idx]
-        creditor_amt, creditor_id = creditors[c_idx]
+        debtor = debtors[d_idx]
+        creditor = creditors[c_idx]
 
-        settle_amount = min(debtor_amt, creditor_amt)
+        settle_amount = round(min(debtor.amount, creditor.amount), 2)
         transfers.append(
             DebtTransfer(
-                debtor_id=debtor_id,
-                creditor_id=creditor_id,
-                amount=round(settle_amount, 2),
+                debtor_id=debtor.user_id,
+                creditor_id=creditor.user_id,
+                amount=settle_amount,
             )
         )
 
-        debtors[d_idx][0] -= settle_amount
-        creditors[c_idx][0] -= settle_amount
+        debtor.amount -= settle_amount
+        creditor.amount -= settle_amount
 
-        if debtors[d_idx][0] <= 0.01:
+        if debtor.amount <= 0.01:
             d_idx += 1
-        if creditors[c_idx][0] <= 0.01:
+        if creditor.amount <= 0.01:
             c_idx += 1
 
     return SettleUpReport(

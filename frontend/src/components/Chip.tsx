@@ -11,6 +11,7 @@ export default function Chip({ label, active, onClick, accent }: ChipProps) {
   return (
     <button
       onClick={onClick}
+      aria-pressed={active}
       style={{
         padding: '6px 14px',
         borderRadius: 20,

@@ -80,3 +80,69 @@ async def test_refine_plan_and_version_bump():
         assert "DTSTART:" in ics_text
         assert "DTEND:" in ics_text
         assert "END:VCALENDAR" in ics_text
+
+        # 7. Test refining with entertainment / nightlife request
+        refine_ent_resp = await client.post(
+            f"/api/v1/trips/{trip_id}/plan/refine",
+            json={
+                "instruction": "Add a nightlife stop or entertainment in the evening on Day 1",
+                "user_id": "creator_refine_test",
+            },
+        )
+        assert refine_ent_resp.status_code == 200
+        plan_v3 = refine_ent_resp.json()
+        assert plan_v3["version"] == 3
+        assert any(
+            "venue" in note.lower()
+            or "nightlife" in note.lower()
+            or "entertainment" in note.lower()
+            for note in plan_v3["notes"]
+        )
+
+
+@pytest.mark.asyncio
+async def test_manual_add_item_without_prior_plan():
+    """Test 'Plan it yourself': adding a stop directly creates plan v1 and sets trip to PLANNED."""
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        # Create trip
+        trip_resp = await client.post(
+            "/api/v1/trips",
+            json={
+                "title": "Manual Planning Trip",
+                "destination": "Lisbon",
+                "start_date": "2026-07-10",
+                "end_date": "2026-07-12",
+                "creator_id": "manual_user_1",
+            },
+        )
+        assert trip_resp.status_code == 201
+        trip_id = trip_resp.json()["id"]
+
+        # Directly add a manual stop without calling /plan (AI generator)
+        item_resp = await client.post(
+            f"/api/v1/trips/{trip_id}/plan/items",
+            json={
+                "day_index": 0,
+                "place_name": "Calouste Gulbenkian Museum",
+                "category": "Museum",
+                "start_time": "2026-07-10T14:00:00",
+                "end_time": "2026-07-10T16:30:00",
+                "cost": 10.0,
+            },
+        )
+        assert item_resp.status_code == 200
+        item = item_resp.json()
+        assert item["place"]["name"] == "Calouste Gulbenkian Museum"
+        assert item["cost"] == 10.0
+
+        # Verify plan was created and can be fetched
+        get_plan_resp = await client.get(f"/api/v1/trips/{trip_id}/plan")
+        assert get_plan_resp.status_code == 200
+        plan = get_plan_resp.json()
+        assert plan["version"] == 1
+        assert len(plan["days"]) == 3
+        assert len(plan["days"][0]["items"]) == 1
+        assert (
+            plan["days"][0]["items"][0]["place"]["name"] == "Calouste Gulbenkian Museum"
+        )

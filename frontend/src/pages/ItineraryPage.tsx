@@ -1,14 +1,5 @@
 import { useState, useEffect, useCallback } from 'react';
-import {
-  Clock,
-  AlertTriangle,
-  Plus,
-  Lock,
-  GitBranch,
-  ShieldCheck,
-  Sparkles,
-  Calendar,
-} from 'lucide-react';
+import { Calendar, AlertTriangle, Plus } from 'lucide-react';
 import {
   BORDER,
   CLAY,
@@ -18,28 +9,110 @@ import {
   SERIF,
   Stop,
 } from '../lib/constants';
-import Chip from '../components/Chip';
-import { PrimaryButton, SecondaryButton } from '../components/Button';
+import { SecondaryButton } from '../components/Button';
 import InteractiveMap from '../components/InteractiveMap';
 import RebalanceModal from '../components/RebalanceModal';
+import AgentExplanations from '../components/AgentExplanations';
+import DayPicker from '../components/itinerary/DayPicker';
+import RefinementAssistant from '../components/itinerary/RefinementAssistant';
+import DisruptionDiffReport from '../components/itinerary/DisruptionDiffReport';
+import ValidationBadge from '../components/itinerary/ValidationBadge';
+import AddStopForm from '../components/itinerary/AddStopForm';
+import StopTimeline from '../components/itinerary/StopTimeline';
 import { api } from '../lib/api';
+
+/** Convert a 24h "HH:MM" string to "H:MM AM/PM" display format */
+function formatTime24to12(time24: string): string {
+  const [hoursStr, minutesStr] = time24.split(':');
+  const hours = parseInt(hoursStr || '0', 10);
+  const minutes = parseInt(minutesStr || '0', 10);
+  const ampm = hours >= 12 ? 'PM' : 'AM';
+  const h12 = hours % 12 === 0 ? 12 : hours % 12;
+  return `${h12}:${minutes.toString().padStart(2, '0')} ${ampm}`;
+}
 
 export interface ItineraryPageProps {
   tripId: string;
+  planMode?: 'ai' | 'manual';
+}
+
+function getDestinationCenter(dest?: string): { lat: number; lng: number } {
+  const d = (dest || '').toLowerCase();
+  if (d.includes('tokyo') || d.includes('japan')) return { lat: 35.6762, lng: 139.6503 };
+  if (d.includes('paris') || d.includes('france')) return { lat: 48.8566, lng: 2.3522 };
+  if (d.includes('new york') || d.includes('nyc')) return { lat: 40.7128, lng: -74.006 };
+  if (d.includes('london')) return { lat: 51.5074, lng: -0.1278 };
+  return { lat: 38.7223, lng: -9.1393 }; // Lisbon default
+}
+
+const DESTINATION_SUGGESTIONS: Record<string, Array<{ name: string; category: string; cost: number }>> = {
+  lisbon: [
+    { name: 'Belém Tower', category: 'Sightseeing', cost: 10 },
+    { name: 'Jerónimos Monastery', category: 'Sightseeing', cost: 12 },
+    { name: 'Time Out Market Lisbon', category: 'Restaurant', cost: 22 },
+    { name: 'MAAT Museum', category: 'Museum', cost: 11 },
+    { name: 'LX Factory Entertainment', category: 'Entertainment', cost: 0 },
+    { name: 'Miradouro de Santa Luzia', category: 'Sightseeing', cost: 0 },
+  ],
+  tokyo: [
+    { name: 'Senso-ji Temple', category: 'Sightseeing', cost: 0 },
+    { name: 'Shibuya Crossing & Hachiko', category: 'Sightseeing', cost: 0 },
+    { name: 'teamLab Planets', category: 'Museum', cost: 32 },
+    { name: 'Tsukiji Outer Market', category: 'Restaurant', cost: 28 },
+    { name: 'Shinjuku Golden Gai', category: 'Entertainment', cost: 20 },
+    { name: 'Akihabara Electric Town', category: 'Entertainment', cost: 10 },
+  ],
+  paris: [
+    { name: 'Louvre Museum', category: 'Museum', cost: 22 },
+    { name: 'Eiffel Tower Summit', category: 'Sightseeing', cost: 35 },
+    { name: 'Musée d\'Orsay', category: 'Museum', cost: 16 },
+    { name: 'Sainte-Chapelle', category: 'Sightseeing', cost: 13 },
+    { name: 'Centre Pompidou', category: 'Entertainment', cost: 15 },
+    { name: 'Montmartre & Sacré-Cœur', category: 'Sightseeing', cost: 0 },
+  ],
+};
+
+interface PlanDayItem {
+  day_index: number;
+  date?: string;
+  items?: Array<{
+    id?: string;
+    place_id?: string;
+    place?: {
+      name?: string;
+      category?: string;
+      lat?: number;
+      lng?: number;
+      est_cost?: number;
+    };
+    cost?: number;
+    start_time?: string;
+  }>;
 }
 
 function convertPlanDaysToStops(
-  days: Array<{ day_index: number; items?: Array<{ id?: string; place_id?: string; place?: { name?: string; category?: string; lat?: number; lng?: number; est_cost?: number }; cost?: number; start_time?: string }> }>,
+  days: PlanDayItem[],
+  destinationName?: string,
 ): Record<number, Stop[]> {
+  const defaultCenter = getDestinationCenter(destinationName);
   const result: Record<number, Stop[]> = {};
   for (const d of days) {
     const dayNumber = d.day_index + 1;
-    result[dayNumber] = (d.items || []).map((item) => {
+    const mappedStops: Stop[] = (d.items || []).map((item) => {
       let formattedTime = '10:00 AM';
       try {
         if (item.start_time) {
-          const dt = new Date(item.start_time);
-          formattedTime = dt.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+          const timePart = item.start_time.includes('T')
+            ? item.start_time.split('T')[1]?.substring(0, 5)
+            : item.start_time.split(' ')[1]?.substring(0, 5);
+          if (timePart && /^\d{1,2}:\d{2}$/.test(timePart)) {
+            formattedTime = formatTime24to12(timePart);
+          } else {
+            const dt = new Date(item.start_time);
+            if (!isNaN(dt.getTime())) {
+              formattedTime = dt.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+            }
+          }
         }
       } catch {
         formattedTime = '10:00 AM';
@@ -51,18 +124,35 @@ function convertPlanDaysToStops(
         cost: item.cost ?? item.place?.est_cost ?? 0,
         note: item.place?.category || null,
         category: item.place?.category || 'Sightseeing',
-        lat: item.place?.lat || 38.72,
-        lng: item.place?.lng || -9.14,
+        lat: item.place?.lat || defaultCenter.lat,
+        lng: item.place?.lng || defaultCenter.lng,
       };
+    });
+    result[dayNumber] = mappedStops.sort((a, b) => {
+      const ampmMatch = (t: string) => t.trim().match(/^(\d{1,2}):(\d{2})\s*(AM|PM)?$/i);
+      const parse = (t: string) => {
+        const m = ampmMatch(t);
+        if (!m) return 0;
+        let h = parseInt(m[1], 10);
+        const min = parseInt(m[2], 10);
+        const mod = m[3]?.toUpperCase();
+        if (mod === 'PM' && h < 12) h += 12;
+        if (mod === 'AM' && h === 12) h = 0;
+        return h * 60 + min;
+      };
+      return parse(a.time) - parse(b.time);
     });
   }
   return result;
 }
 
-export default function ItineraryPage({ tripId }: ItineraryPageProps) {
+export default function ItineraryPage({ tripId, planMode = 'ai' }: ItineraryPageProps) {
   const [day, setDay] = useState<number>(1);
+  const [destination, setDestination] = useState<string>('');
   const [isRebalanceOpen, setIsRebalanceOpen] = useState(false);
   const [planVersion, setPlanVersion] = useState(1);
+  const [tripDays, setTripDays] = useState<number[]>([1, 2]);
+  const [planDaysList, setPlanDaysList] = useState<Array<{ day_index: number; date: string }>>([]);
   const [activeDiff, setActiveDiff] = useState<{
     version: number;
     scenario: string;
@@ -72,111 +162,145 @@ export default function ItineraryPage({ tripId }: ItineraryPageProps) {
   } | null>(null);
 
   const [notes, setNotes] = useState<string[]>([]);
-  const [refineInstruction, setRefineInstruction] = useState('');
-  const [isRefining, setIsRefining] = useState(false);
+  const [isAddingStop, setIsAddingStop] = useState(false);
 
   // Dynamic Stop data state loaded from backend API
   const [stopsByDay, setStopsByDay] = useState<Record<number, Stop[]>>({});
-  const [isAddingStop, setIsAddingStop] = useState(false);
-  const [newStopName, setNewStopName] = useState('');
-  const [newStopTime, setNewStopTime] = useState('16:00');
-  const [newStopCost, setNewStopCost] = useState('10');
 
   const loadPlan = useCallback(() => {
     if (!tripId) return;
-    api.plan
+
+    api.trips
       .get(tripId)
-      .then((plan) => {
-        if (plan) {
-          setPlanVersion(plan.version || 1);
-          setNotes(plan.notes || []);
-          if (plan.days && plan.days.length > 0) {
-            const mapped = convertPlanDaysToStops(plan.days);
-            setStopsByDay(mapped);
-          }
+      .then((trip) => {
+        let currentDest = '';
+        if (trip?.destination) {
+          currentDest = trip.destination;
+          setDestination(trip.destination);
         }
+        if (trip?.start_date && trip?.end_date) {
+          const start = new Date(trip.start_date);
+          const end = new Date(trip.end_date);
+          const diff = Math.round((end.getTime() - start.getTime()) / (1000 * 60 * 60 * 24));
+          const count = Math.max(1, diff + 1);
+          setTripDays(Array.from({ length: count }, (_, i) => i + 1));
+        }
+        return currentDest;
+      })
+      .then((currentDest) => {
+        return api.plan.get(tripId).then((plan) => {
+          if (plan) {
+            setPlanVersion(plan.version || 1);
+            setNotes(plan.notes || []);
+            if (plan.days && plan.days.length > 0) {
+              setPlanDaysList(plan.days.map((d) => ({ day_index: d.day_index, date: String(d.date) })));
+              setTripDays(plan.days.map((d) => d.day_index + 1));
+              const mapped = convertPlanDaysToStops(plan.days, currentDest || destination);
+              setStopsByDay(mapped);
+            }
+          }
+        });
       })
       .catch(() => {
         // Fallback for initial state before planning
       });
-  }, [tripId]);
+  }, [tripId, destination]);
 
-  const handleRefine = async () => {
-    if (!refineInstruction.trim() || isRefining) return;
-    setIsRefining(true);
-    try {
-      const updated = await api.plan.refine(tripId, {
-        instruction: refineInstruction.trim(),
-      });
-      if (updated) {
-        setPlanVersion(updated.version || planVersion + 1);
-        setNotes(updated.notes || []);
-        if (updated.days && updated.days.length > 0) {
-          setStopsByDay(convertPlanDaysToStops(updated.days));
-        }
-      }
-      setRefineInstruction('');
-    } catch {
-      // Fallback
-    } finally {
-      setIsRefining(false);
+  const handleRefined = useCallback((version: number, newNotes: string[], days: PlanDayItem[]) => {
+    setPlanVersion(version);
+    setNotes(newNotes);
+    if (days && days.length > 0) {
+      setStopsByDay(convertPlanDaysToStops(days, destination));
     }
-  };
+  }, [destination]);
 
   useEffect(() => {
     loadPlan();
   }, [loadPlan]);
 
-  const handleAddStop = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!newStopName.trim()) return;
-
-    const costNum = parseFloat(newStopCost) || 0;
+  const handleAddStop = async (newStop: Omit<Stop, 'id'>) => {
     const dayIdx = day - 1;
+    const [hoursStr, minutesStr] = newStop.time.includes(':') ? newStop.time.split(':') : ['16', '00'];
+    const hours = parseInt(hoursStr, 10);
+    const minutes = parseInt(minutesStr.replace(/\D/g, ''), 10);
+    const endH = (hours + 2) % 24;
+
+    const dayDateStr =
+      planDaysList.find((p) => p.day_index === dayIdx)?.date ||
+      new Date().toISOString().split('T')[0];
+    const startTime = `${dayDateStr}T${hours.toString().padStart(2, '0')}:${minutes.toString().padStart(2, '0')}:00`;
+    const endTime = `${dayDateStr}T${endH.toString().padStart(2, '0')}:${minutes.toString().padStart(2, '0')}:00`;
 
     try {
-      const [hoursStr, minutesStr] = newStopTime.split(':');
-      const hours = parseInt(hoursStr || '16', 10);
-      const minutes = parseInt(minutesStr || '0', 10);
-      
-      const startTimeObj = new Date();
-      startTimeObj.setHours(hours, minutes, 0, 0);
-      const startTime = startTimeObj.toISOString();
-      
-      const endTimeObj = new Date(startTimeObj);
-      endTimeObj.setHours(hours + 2, minutes, 0, 0);
-      const endTime = endTimeObj.toISOString();
-
-      await api.plan.addItem(tripId, {
+      const addedItem = await api.plan.addItem(tripId, {
         day_index: dayIdx,
-        place_name: newStopName.trim(),
-        category: 'Sightseeing',
+        place_name: newStop.name,
+        category: newStop.category,
         start_time: startTime,
         end_time: endTime,
-        cost: costNum,
+        cost: newStop.cost,
       });
+      if (addedItem && addedItem.id) {
+        const resolvedStop: Stop = {
+          ...newStop,
+          id: addedItem.id,
+          name: addedItem.place?.name || newStop.name,
+          cost: addedItem.cost ?? newStop.cost,
+          note: addedItem.place?.category || newStop.note,
+          category: addedItem.place?.category || newStop.category,
+          lat: addedItem.place?.lat ?? newStop.lat,
+          lng: addedItem.place?.lng ?? newStop.lng,
+        };
+        setStopsByDay((prev) => ({
+          ...prev,
+          [day]: [...(prev[day] || []), resolvedStop].sort((a, b) => {
+            const parse = (t: string) => {
+              const m = t.trim().match(/^(\d{1,2}):(\d{2})\s*(AM|PM)?$/i);
+              if (!m) return 0;
+              let h = parseInt(m[1], 10);
+              const min = parseInt(m[2], 10);
+              const mod = m[3]?.toUpperCase();
+              if (mod === 'PM' && h < 12) h += 12;
+              if (mod === 'AM' && h === 12) h = 0;
+              return h * 60 + min;
+            };
+            return parse(a.time) - parse(b.time);
+          }),
+        }));
+      }
       loadPlan();
     } catch {
-      const newStop: Stop = {
-        id: `stop-${Date.now()}`,
-        time: newStopTime,
-        name: newStopName.trim(),
-        cost: costNum,
-        note: 'Custom manual stop added to schedule',
-        category: 'Sightseeing',
-      };
-
-      setStopsByDay((prev) => ({
-        ...prev,
-        [day]: [...(prev[day] || []), newStop],
-      }));
+      // Offline fallback: already placed optimistically in state
     }
-
-    setNewStopName('');
-    setIsAddingStop(false);
   };
 
+  const handleDeleteStop = async (stopId?: string) => {
+    if (!stopId) return;
+    try {
+      if (!stopId.startsWith('stop-')) {
+        await api.plan.deleteItem(tripId, stopId);
+      }
+    } catch {
+      // offline fallback
+    }
+    setStopsByDay((prev) => ({
+      ...prev,
+      [day]: (prev[day] || []).filter((s) => s.id !== stopId),
+    }));
+  };
+
+  const availableDays = Array.from(
+    new Set([...tripDays, ...Object.keys(stopsByDay).map(Number)])
+  ).sort((a, b) => a - b);
+
   const currentStops = stopsByDay[day] || [];
+
+  const destKey = destination.toLowerCase().trim();
+  const suggestedStops =
+    DESTINATION_SUGGESTIONS[destKey] ||
+    (destKey.includes('tokyo') ? DESTINATION_SUGGESTIONS['tokyo'] : null) ||
+    (destKey.includes('paris') ? DESTINATION_SUGGESTIONS['paris'] : null) ||
+    DESTINATION_SUGGESTIONS['lisbon'];
 
   return (
     <div style={{ width: '100%', maxWidth: 760, margin: '0 auto' }}>
@@ -257,156 +381,30 @@ export default function ItineraryPage({ tripId }: ItineraryPageProps) {
       </div>
 
       {/* Disruption Diff Report (if triggered) */}
-      {activeDiff && (
-        <div
-          style={{
-            padding: '14px 18px',
-            borderRadius: 12,
-            background: '#FDF6F2',
-            border: `1px solid ${CLAY}`,
-            marginBottom: 20,
-          }}
-        >
-          <div
-            style={{
-              display: 'flex',
-              alignItems: 'center',
-              gap: 8,
-              marginBottom: 6,
-            }}
-          >
-            <GitBranch size={16} color={CLAY} />
-            <strong style={{ fontSize: 14, color: INK }}>
-              Dynamic Rebalance Version Diff (v{activeDiff.version - 1} → v
-              {activeDiff.version})
-            </strong>
-          </div>
-          <div style={{ fontSize: 13, color: INK, marginBottom: 8, lineHeight: 1.4 }}>
-            <strong>{activeDiff.scenario}:</strong> {activeDiff.substitution}
-          </div>
-          <div style={{ display: 'flex', gap: 12, fontSize: 12, color: MUTED, flexWrap: 'wrap' }}>
-            <span style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
-              <Clock size={12} color={CLAY} /> {activeDiff.affectedWindow}
-            </span>
-            <span style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
-              <Lock size={12} color={PINE} /> {activeDiff.unaffectedDays}
-            </span>
-          </div>
-        </div>
-      )}
+      <DisruptionDiffReport
+        diff={activeDiff}
+        onDismiss={() => setActiveDiff(null)}
+      />
 
       {/* Deterministic Validation Integrity Badge */}
-      <div
-        style={{
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'space-between',
-          padding: '10px 14px',
-          borderRadius: 10,
-          background: '#EEF3ED',
-          border: `1px solid #D5E2D4`,
-          marginBottom: 16,
-          fontSize: 12,
-          color: PINE,
-          flexWrap: 'wrap',
-          gap: 6,
-        }}
-      >
-        <span style={{ display: 'flex', alignItems: 'center', gap: 6, fontWeight: 600 }}>
-          <ShieldCheck size={16} /> Deterministic Plan Validation Passed
-        </span>
-        <span>Budget math, Travel geometry, & Hours synchronized</span>
-      </div>
+      <ValidationBadge notes={notes} planMode={planMode} />
 
       {/* Natural-Language Refinement Assistant */}
-      <div
-        style={{
-          padding: '14px 18px',
-          borderRadius: 12,
-          background: '#fff',
-          border: `1px solid ${BORDER}`,
-          marginBottom: 16,
-        }}
-      >
-        <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
-          <Sparkles size={16} color={PINE} />
-          <span style={{ fontSize: 13, fontWeight: 600, color: INK }}>
-            Refine Itinerary with AI Agent
-          </span>
-        </div>
-        <div style={{ display: 'flex', gap: 8, marginBottom: 8 }}>
-          <input
-            type="text"
-            value={refineInstruction}
-            onChange={(e) => setRefineInstruction(e.target.value)}
-            placeholder="e.g. 'Make Day 2 more relaxed', 'Swap lunch for seafood under $30'..."
-            style={{
-              flex: 1,
-              padding: '8px 12px',
-              borderRadius: 8,
-              border: `1px solid ${BORDER}`,
-              fontSize: 13,
-              outline: 'none',
-              background: '#FAF6EE',
-            }}
-            onKeyDown={(e) => {
-              if (e.key === 'Enter') handleRefine();
-            }}
-          />
-          <PrimaryButton
-            onClick={handleRefine}
-            disabled={isRefining || !refineInstruction.trim()}
-            style={{ fontSize: 13, padding: '8px 16px', whiteSpace: 'nowrap' }}
-          >
-            {isRefining ? 'Refining...' : 'Refine'}
-          </PrimaryButton>
-        </div>
-        <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
-          {[
-            'Make Day 2 more relaxed',
-            'Swap lunch for seafood under $30',
-            'Add evening viewpoint',
-          ].map((prompt) => (
-            <button
-              key={prompt}
-              type="button"
-              onClick={() => setRefineInstruction(prompt)}
-              style={{
-                fontSize: 11,
-                padding: '4px 8px',
-                borderRadius: 6,
-                background: '#F8F9FA',
-                border: `1px solid ${BORDER}`,
-                color: MUTED,
-                cursor: 'pointer',
-              }}
-            >
-              {prompt}
-            </button>
-          ))}
-        </div>
-      </div>
+      <RefinementAssistant
+        tripId={tripId}
+        destination={destination}
+        planVersion={planVersion}
+        notes={notes}
+        onRefined={handleRefined}
+      />
 
-      {/* Agent Reasoning & Tradeoff Explanations */}
-      {notes && notes.length > 0 && (
-        <div
-          style={{
-            padding: '12px 16px',
-            borderRadius: 10,
-            background: '#FAF8F5',
-            border: `1px solid ${BORDER}`,
-            marginBottom: 16,
-          }}
-        >
-          <div style={{ fontSize: 12, fontWeight: 600, color: INK, marginBottom: 6 }}>
-            Agent Reasoning & Tradeoff Explanations:
-          </div>
-          <ul style={{ margin: 0, paddingLeft: 18, fontSize: 12, color: MUTED, lineHeight: 1.5 }}>
-            {notes.map((note, idx) => (
-              <li key={idx}>{note}</li>
-            ))}
-          </ul>
-        </div>
+      {/* Agent Self-Correction & Tradeoff Explanations (Shown in 'ai' plan mode, removed in 'manual' plan mode) */}
+      {planMode === 'ai' && notes && notes.length > 0 && (
+        <AgentExplanations
+          notes={notes}
+          title="Agent Self-Correction & Tradeoff Explanations"
+          style={{ marginBottom: 16 }}
+        />
       )}
 
       {/* Interactive Map Visualizing Spatial Geometry */}
@@ -423,19 +421,11 @@ export default function ItineraryPage({ tripId }: ItineraryPageProps) {
           gap: 8,
         }}
       >
-        <div style={{ display: 'flex', gap: 8 }}>
-          {(Object.keys(stopsByDay).length > 0
-            ? Object.keys(stopsByDay).map(Number).sort((a, b) => a - b)
-            : [1, 2]
-          ).map((d) => (
-            <Chip
-              key={d}
-              label={`Day ${d}`}
-              active={day === d}
-              onClick={() => setDay(d)}
-            />
-          ))}
-        </div>
+        <DayPicker
+          availableDays={availableDays}
+          currentDay={day}
+          onDayChange={setDay}
+        />
 
         <button
           type="button"
@@ -458,201 +448,22 @@ export default function ItineraryPage({ tripId }: ItineraryPageProps) {
       </div>
 
       {/* Manual Add Stop Form */}
-      {isAddingStop && (
-        <form
-          onSubmit={handleAddStop}
-          style={{
-            padding: 16,
-            borderRadius: 10,
-            background: '#FAF6EE',
-            border: `1px solid ${BORDER}`,
-            marginBottom: 20,
-            display: 'flex',
-            flexWrap: 'wrap',
-            gap: 8,
-            alignItems: 'center',
-          }}
-        >
-          <input
-            type="text"
-            placeholder="Venue Name (e.g. MAAT Museum)"
-            value={newStopName}
-            onChange={(e) => setNewStopName(e.target.value)}
-            style={{
-              flex: 2,
-              padding: '8px 10px',
-              borderRadius: 6,
-              border: `1px solid ${BORDER}`,
-              fontSize: 13,
-              background: '#fff',
-              outline: 'none',
-            }}
-          />
-          <input
-            type="time"
-            value={newStopTime}
-            onChange={(e) => setNewStopTime(e.target.value)}
-            style={{
-              flex: 1,
-              padding: '8px 10px',
-              borderRadius: 6,
-              border: `1px solid ${BORDER}`,
-              fontSize: 13,
-              background: '#fff',
-              outline: 'none',
-            }}
-          />
-          <div style={{ position: 'relative', width: 80 }}>
-            <span style={{ position: 'absolute', left: 10, top: 9, fontSize: 13, color: MUTED }}>$</span>
-            <input
-              type="number"
-              placeholder="0"
-              value={newStopCost}
-              onChange={(e) => setNewStopCost(e.target.value)}
-              style={{
-                width: '100%',
-                padding: '8px 10px 8px 22px',
-                borderRadius: 6,
-                border: `1px solid ${BORDER}`,
-                fontSize: 13,
-                background: '#fff',
-                outline: 'none',
-                boxSizing: 'border-box',
-              }}
-            />
-          </div>
-          <button
-            type="submit"
-            style={{
-              padding: '8px 14px',
-              borderRadius: 6,
-              border: 'none',
-              background: PINE,
-              color: '#fff',
-              fontSize: 13,
-              fontWeight: 500,
-              cursor: 'pointer',
-            }}
-          >
-            Add
-          </button>
-        </form>
-      )}
+      <AddStopForm
+        isOpen={isAddingStop}
+        onClose={() => setIsAddingStop(false)}
+        onAddStop={handleAddStop}
+        day={day}
+        destination={destination}
+        stopsByDay={stopsByDay}
+        suggestedStops={suggestedStops}
+      />
 
       {/* Stops Timeline */}
-      <div style={{ background: '#fff', borderRadius: 12, border: `1px solid ${BORDER}`, padding: '4px 16px' }}>
-        {currentStops.length === 0 ? (
-          <div style={{ padding: '32px 16px', textAlign: 'center', color: MUTED, fontSize: 13, fontStyle: 'italic' }}>
-            No stops scheduled for Day {day} yet. Click 'Add Stop' above or generate an itinerary from the Overview tab.
-          </div>
-        ) : (
-          currentStops.map((stop, i) => (
-            <div
-              key={stop.id || i}
-              style={{
-                display: 'flex',
-                gap: 14,
-                padding: '16px 4px',
-                borderBottom:
-                  i < currentStops.length - 1
-                    ? `1px solid ${BORDER}`
-                    : 'none',
-              }}
-            >
-              {/* Time */}
-              <div
-                style={{
-                  width: 80,
-                  flexShrink: 0,
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: 5,
-                  color: MUTED,
-                  fontSize: 13,
-                }}
-              >
-                <Clock size={13} /> {stop.time}
-              </div>
-
-              {/* Stop Details */}
-              <div style={{ flex: 1 }}>
-                <div
-                  style={{
-                    display: 'flex',
-                    alignItems: 'center',
-                    gap: 8,
-                    flexWrap: 'wrap',
-                  }}
-                >
-                  <span
-                    style={{
-                      fontSize: 15,
-                      fontWeight: 600,
-                      color: INK,
-                    }}
-                  >
-                    {stop.name}
-                  </span>
-
-                  {stop.cost > 0 ? (
-                    <span
-                      style={{
-                        fontSize: 12,
-                        color: MUTED,
-                        background: '#FAF6EE',
-                        padding: '1px 6px',
-                        borderRadius: 4,
-                      }}
-                    >
-                      ${stop.cost}
-                    </span>
-                  ) : (
-                    <span
-                      style={{
-                        fontSize: 12,
-                        color: PINE,
-                        background: '#EEF3ED',
-                        padding: '1px 6px',
-                        borderRadius: 4,
-                      }}
-                    >
-                      Free
-                    </span>
-                  )}
-
-                  {stop.category && (
-                    <span
-                      style={{
-                        fontSize: 11,
-                        color: MUTED,
-                        border: `1px solid ${BORDER}`,
-                        padding: '1px 6px',
-                        borderRadius: 10,
-                      }}
-                    >
-                      {stop.category}
-                    </span>
-                  )}
-                </div>
-
-                {/* Transition notes & reasonings */}
-                {stop.note && (
-                  <p
-                    style={{
-                      fontSize: 13,
-                      color: MUTED,
-                      margin: '4px 0 0',
-                      lineHeight: 1.4,
-                    }}
-                  >
-                    {stop.note}
-                  </p>
-                )}
-              </div>
-            </div>
-          ))
-        )}
-      </div>
+      <StopTimeline
+        stops={currentStops}
+        day={day}
+        onDeleteStop={handleDeleteStop}
+      />
 
       <RebalanceModal
         isOpen={isRebalanceOpen}

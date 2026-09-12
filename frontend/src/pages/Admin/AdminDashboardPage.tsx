@@ -141,7 +141,7 @@ const DEFAULT_USERS: AdminUserItem[] = [
 const DEFAULT_API_USAGE: AdminApiUsageItem[] = [
   { name: 'Google Places API', used: 3120, freeLimit: 10000, cost: 0, category: 'places' },
   { name: 'Distance Matrix API', used: 1840, freeLimit: 2500, cost: 0, category: 'distance' },
-  { name: 'LLM (Gemini 2.5 Flash)', used: 890, freeLimit: 1500, cost: 4.2, category: 'llm' },
+  { name: 'LLM (Gemini 3.6 Flash)', used: 890, freeLimit: 1500, cost: 4.2, category: 'llm' },
 ];
 
 const DEFAULT_SYSTEM: AdminSystemHealthNode[] = [
@@ -568,6 +568,8 @@ export default function AdminDashboardPage({
               <button
                 type="button"
                 onClick={() => setIsMobileDrawerOpen(false)}
+                aria-label="Close admin menu"
+                title="Close"
                 style={{
                   border: 'none',
                   background: 'transparent',
@@ -1317,16 +1319,30 @@ export default function AdminDashboardPage({
                   marginBottom: 24,
                 }}
               >
-                <h3
-                  style={{
-                    ...SERIF,
-                    fontSize: 19,
-                    fontWeight: 400,
-                    margin: '0 0 6px',
-                  }}
-                >
-                  External API Quotas & Spend
-                </h3>
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 6 }}>
+                  <h3
+                    style={{
+                      ...SERIF,
+                      fontSize: 19,
+                      fontWeight: 400,
+                      margin: 0,
+                    }}
+                  >
+                    External API Quotas & Spend
+                  </h3>
+                  <span
+                    style={{
+                      fontSize: 11,
+                      fontWeight: 500,
+                      padding: '3px 8px',
+                      borderRadius: 12,
+                      background: '#EFEAE0',
+                      color: PINE_DARK,
+                    }}
+                  >
+                    Estimated from DB Records
+                  </span>
+                </div>
                 <p
                   style={{
                     fontSize: 13,
@@ -1335,7 +1351,7 @@ export default function AdminDashboardPage({
                     lineHeight: 1.5,
                   }}
                 >
-                  Free-tier consumption across the external services called by the agent planner loop during constraint optimization.
+                  Free-tier consumption across the external services called by the agent planner loop during constraint optimization. Values are calculated from database records, not live API billing.
                 </p>
 
                 {apiUsage.map((item) => {
@@ -1401,19 +1417,33 @@ export default function AdminDashboardPage({
                   style={{
                     display: 'flex',
                     alignItems: 'center',
-                    gap: 10,
+                    justifyContent: 'space-between',
                     marginBottom: 8,
                   }}
                 >
-                  <Database size={16} color={PINE} />
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                    <Database size={16} color={PINE} />
+                    <span
+                      style={{
+                        fontSize: 14,
+                        fontWeight: 600,
+                        color: INK,
+                      }}
+                    >
+                      Caching Savings & Optimization
+                    </span>
+                  </div>
                   <span
                     style={{
-                      fontSize: 14,
-                      fontWeight: 600,
-                      color: INK,
+                      fontSize: 11,
+                      fontWeight: 500,
+                      padding: '3px 8px',
+                      borderRadius: 12,
+                      background: '#EFEAE0',
+                      color: PINE_DARK,
                     }}
                   >
-                    Caching Savings & Optimization
+                    Simulated
                   </span>
                 </div>
                 <p
@@ -1424,7 +1454,7 @@ export default function AdminDashboardPage({
                     lineHeight: 1.5,
                   }}
                 >
-                  Local Redis and SQLite Place caching prevents redundant external lookups for common attractions and transit times, maintaining 78% cache hits and zero Google Places charges this billing cycle.
+                  Local Redis and SQLite Place caching prevents redundant external lookups for common attractions and transit times, maintaining cache hits and reducing Google Places charges.
                 </p>
               </div>
             </div>
@@ -1450,9 +1480,24 @@ export default function AdminDashboardPage({
                     fontSize: 13,
                     fontWeight: 600,
                     color: INK,
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'space-between',
                   }}
                 >
-                  Core Infrastructure Services
+                  <span>Core Infrastructure Services</span>
+                  <span
+                    style={{
+                      fontSize: 11,
+                      fontWeight: 500,
+                      padding: '3px 8px',
+                      borderRadius: 12,
+                      background: '#EFEAE0',
+                      color: PINE_DARK,
+                    }}
+                  >
+                    Simulated Data
+                  </span>
                 </div>
 
                 {systemHealth.map((s, idx) => {
@@ -1560,8 +1605,8 @@ export default function AdminDashboardPage({
                   >
                     System Activity & Event Logs
                   </span>
-                  <span style={{ fontSize: 12, color: MUTED }}>
-                    Showing last 4 system events
+                  <span style={{ fontSize: 11, fontWeight: 500, padding: '3px 8px', borderRadius: 12, background: '#EFEAE0', color: PINE_DARK }}>
+                    Simulated Data
                   </span>
                 </div>
 

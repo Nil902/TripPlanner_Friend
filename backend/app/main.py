@@ -34,10 +34,18 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
-# Configure CORS
+# Configure CORS — SECURITY.md prohibits wildcard origins in production.
+# cors_origins_list must be non-empty; misconfiguration raises at startup.
+cors_origins = settings.cors_origins_list
+if not cors_origins:
+    import logging as _logging
+    _logging.getLogger(__name__).error(
+        "CORS_ORIGINS is empty — rejecting all cross-origin requests. "
+        "Set CORS_ORIGINS in .env (e.g. http://localhost:5173)."
+    )
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=settings.cors_origins_list or ["*"],
+    allow_origins=cors_origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

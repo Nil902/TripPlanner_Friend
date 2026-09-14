@@ -6,7 +6,7 @@ import json
 import logging
 import time
 import uuid
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 
 import httpx
 
@@ -24,10 +24,11 @@ from app.models.schema import (
 
 logger = logging.getLogger(__name__)
 
+FOOD_CATEGORIES = {"restaurant", "cafe", "market"}
+
 
 def build_day_dates(start_date: date, end_date: date) -> list[date]:
     """Generate list of dates from start_date to end_date inclusive."""
-    from datetime import timedelta
 
     delta = (end_date - start_date).days
     num_days = max(1, delta + 1)
@@ -250,10 +251,16 @@ def call_gemini_proposer(
         prompt_parts.append(
             "Generate a realistic and diverse day-by-day schedule.\n\n"
             "CRITICAL RULES:\n"
-            "1. Each place_id may appear at most ONCE per day — never repeat the same venue within a day.\n"
-            "2. Each day must include at least 3 different non-food activities "
+            "1. Each place_id may appear at most ONCE across the ENTIRE trip. "
+            "Never schedule the same venue on two different days.\n"
+            "2. If the Candidate Places Pool has fewer venues than the number of "
+            "stops needed, REDUCE the number of stops per day instead of reusing a venue. "
+            "Never repeat a venue just to fill a slot.\n"
+            "3. Never give two stops the same start_time, and never place the same "
+            "venue at the same clock time (e.g. 09:30) on different days.\n"
+            "4. Each day must include at least 3 different non-food activities "
             "(landmarks, museums, parks, viewpoints, cultural sites, entertainment).\n"
-            "3. At most 2 food/dining stops per day (lunch and dinner). "
+            "5. At most 2 food/dining stops per day (lunch and dinner). "
             "The remaining stops must be sightseeing, culture, or entertainment.\n\n"
             "Suggested daily structure:\n"
             "  - Morning (09:30–11:30): sightseeing — landmark, historic site, museum, or viewpoint\n"
@@ -432,3 +439,254 @@ def create_plan_response(
         notes=plan.notes or [],
         created_at=plan.created_at,
     )
+
+
+def enforce_schedule_uniqueness(
+    days: list[PlanDayResponse],
+    places: list[Place],
+) -> list[PlanDayResponse]:
+    """
+    Deterministically de-duplicate venue bookings across the entire trip.
+
+    - When the candidate pool can fill every slot with a unique venue (strict
+      mode), each ``place_id`` appears at most once across all days. If a day
+      would otherwise lose its only dining option, one repeated dining venue is
+      restored at a gap-safe clock time so the trip still covers meals.
+    - When the pool is too small (lenient mode), every venue is de-duplicated
+      across the trip regardless of category; identical (place_id, start clock
+      time) pairs are ALWAYS collapsed so no venue appears at the same time on
+      multiple days.
+
+    Returns a new schedule list; original ``days`` is not mutated.
+    """
+    if not days:
+        return days
+
+    total_slots = sum(len(d.items) for d in days)
+    strict_mode = len(places) >= total_slots
+
+    used_places: set[str] = set()
+    place_clocks: dict[str, set[str]] = {}
+    result: list[PlanDayResponse] = []
+    dropped_food_by_day: dict[int, list[PlanItemResponse]] = {}
+
+    def gap_safe_clock(
+        item: PlanItemResponse,
+        day_items: list[PlanItemResponse],
+    ) -> datetime | None:
+        """Pick a free start clock that maximises the gap to day neighbours."""
+        pid = item.place_id
+        used_clocks = place_clocks.get(pid, set())
+        duration = item.end_time - item.start_time
+        base = datetime.combine(item.start_time.date(), datetime.min.time())
+        best: datetime | None = None
+        best_score = -1.0
+        for hour in range(8, 22):
+            for minute in (0, 30):
+                cand = base.replace(hour=hour, minute=minute)
+                cand_clock = cand.strftime("%H:%M")
+                if cand_clock in used_clocks:
+                    continue
+                cand_end = cand + duration
+                prev_end = max(
+                    (it.end_time for it in day_items if it.end_time <= cand),
+                    default=None,
+                )
+                next_start = min(
+                    (it.start_time for it in day_items if it.start_time >= cand_end),
+                    default=None,
+                )
+                scores = []
+                if prev_end is not None:
+                    scores.append((cand - prev_end).total_seconds() / 60)
+                if next_start is not None:
+                    scores.append((next_start - cand_end).total_seconds() / 60)
+                if not scores:
+                    min_gap = 120.0
+                else:
+                    min_gap = min(scores)
+                    if min_gap < 45:
+                        continue
+                score = min_gap - hour * 0.01
+                if score > best_score:
+                    best_score = score
+                    best = cand
+        return best
+
+    for day in days:
+        kept: list[PlanItemResponse] = []
+        for item in day.items:
+            pid = item.place_id
+            clock = item.start_time.strftime("%H:%M")
+            is_food = bool(item.place and item.place.category in FOOD_CATEGORIES)
+
+            if pid in used_places:
+                if is_food and strict_mode:
+                    dropped_food_by_day.setdefault(day.day_index, []).append(item)
+                # Trip-level duplicate (non-dining always, dining when lenient
+                # or when handled by the strict-mode meal restoration below).
+                continue
+
+            place_clocks.setdefault(pid, set()).add(clock)
+            used_places.add(pid)
+            kept.append(item)
+
+        result.append(
+            PlanDayResponse(
+                date=day.date,
+                day_index=day.day_index,
+                items=kept,
+            )
+        )
+
+    if strict_mode:
+        for day in result:
+            has_food = any(
+                it.place and it.place.category in FOOD_CATEGORIES for it in day.items
+            )
+            if has_food:
+                continue
+            candidates = dropped_food_by_day.get(day.day_index, [])
+            if not candidates:
+                continue
+            rescued = candidates[0]
+            new_start = gap_safe_clock(rescued, day.items)
+            if new_start is None:
+                continue
+            pid = rescued.place_id
+            duration = rescued.end_time - rescued.start_time
+            rescued = PlanItemResponse(
+                id=rescued.id,
+                place_id=rescued.place_id,
+                place=rescued.place,
+                day_index=rescued.day_index,
+                start_time=new_start,
+                end_time=new_start + duration,
+                cost=rescued.cost,
+            )
+            place_clocks.setdefault(pid, set()).add(new_start.strftime("%H:%M"))
+            day.items.append(rescued)
+            day.items.sort(key=lambda it: it.start_time)
+
+    return result
+
+
+def call_gemini_ask(
+    trip: Trip,
+    places: list[Place],
+    plan_days: list[PlanDayResponse] | None,
+    question: str,
+) -> str | None:
+    """Ask the AI agent an open-ended question about the destination/plan.
+
+    Returns a concise human-readable answer, or ``None`` if the LLM is
+    unavailable so callers can fall back to a deterministic response.
+    """
+    if not settings.GEMINI_API_KEY:
+        return None
+
+    try:
+        places_summary = [
+            {
+                "name": p.name,
+                "category": p.category,
+                "est_cost": p.est_cost,
+            }
+            for p in places
+        ]
+
+        current_plan_summary = []
+        if plan_days:
+            for d in plan_days:
+                for it in d.items:
+                    current_plan_summary.append(
+                        {
+                            "day": d.day_index + 1,
+                            "name": it.place.name if it.place else it.place_id,
+                            "time": it.start_time.strftime("%H:%M"),
+                            "cost": it.cost,
+                        }
+                    )
+
+        prompt_parts = [
+            "You are a friendly, practical AI travel assistant.",
+            f"Destination: {trip.destination}",
+            f"Confirmed candidate venues: {json.dumps(places_summary)}",
+            (
+                "Current itinerary: " + json.dumps(current_plan_summary)
+                if current_plan_summary
+                else "No itinerary generated yet."
+            ),
+            "Answer the traveler's question briefly and concretely, referencing "
+            "venues by name where relevant. Use short bullet points when listing "
+            "multiple recommendations.",
+            f"Traveler's question: {question}",
+            ('Respond strictly with JSON: {"answer": "..."}'),
+        ]
+        full_prompt = "\n\n".join(prompt_parts)
+        url = (
+            f"https://generativelanguage.googleapis.com/v1beta/models/"
+            f"{settings.LLM_MODEL_NAME}:generateContent?key={settings.GEMINI_API_KEY}"
+        )
+        payload = {
+            "contents": [{"parts": [{"text": full_prompt}]}],
+            "generationConfig": {
+                "responseMimeType": "application/json",
+                "temperature": 0.3,
+            },
+        }
+
+        for attempt in range(3):
+            try:
+                with httpx.Client(timeout=12.0) as client:
+                    res = client.post(url, json=payload)
+                if res.status_code == 200:
+                    data = res.json()
+                    candidates = data.get("candidates", [])
+                    if candidates:
+                        raw_text = (
+                            candidates[0]
+                            .get("content", {})
+                            .get("parts", [{}])[0]
+                            .get("text", "")
+                        )
+                        parsed = json.loads(raw_text)
+                        if isinstance(parsed, dict) and parsed.get("answer"):
+                            return str(parsed["answer"]).strip()
+                if res.status_code == 429 or 500 <= res.status_code < 600:
+                    if attempt < 2:
+                        backoff = (2**attempt) * 1.5
+                        logger.warning(
+                            f"Gemini ask API returned {res.status_code}; "
+                            f"retrying in {backoff:.1f}s..."
+                        )
+                        time.sleep(backoff)
+                        continue
+                    break
+                logger.warning(
+                    f"Gemini ask API returned non-retryable status {res.status_code}"
+                )
+                return None
+            except httpx.TimeoutException:
+                if attempt < 2:
+                    backoff = (2**attempt) * 1.5
+                    logger.warning(
+                        f"Gemini ask request timed out; retrying in {backoff:.1f}s..."
+                    )
+                    time.sleep(backoff)
+                else:
+                    return None
+            except Exception as exc:
+                if attempt < 2:
+                    backoff = (2**attempt) * 1.5
+                    logger.warning(
+                        f"Gemini ask attempt {attempt + 1} failed ({exc}); "
+                        f"retrying in {backoff:.1f}s..."
+                    )
+                    time.sleep(backoff)
+                else:
+                    return None
+
+    except Exception as exc:
+        logger.warning(f"Gemini ask failed ({exc}).")
+    return None

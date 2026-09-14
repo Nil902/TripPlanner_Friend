@@ -3,13 +3,23 @@ Unit tests for the deterministic heuristic proposer:
 - No duplicate venues within a single day.
 - Prefers trip-fresh venues across days.
 - Balanced food vs non-food slot distribution.
+- Trip-wide de-duplication of identical (place, time) bookings.
 """
 
 import uuid
-from datetime import date
+from datetime import date, datetime
 
-from app.models.schema import Place
-from app.services.proposer import build_day_dates, propose_schedule
+from app.models.schema import (
+    Place,
+    PlaceResponse,
+    PlanDayResponse,
+    PlanItemResponse,
+)
+from app.services.proposer import (
+    build_day_dates,
+    enforce_schedule_uniqueness,
+    propose_schedule,
+)
 
 FOOD_CATEGORIES = {"restaurant", "cafe", "market"}
 
@@ -103,3 +113,134 @@ def test_food_stops_capped_at_two_per_day_with_culture_recommended():
         )
         non_food_count = len(day.items) - food_count
         assert non_food_count >= 2
+
+
+def _day(
+    day_index: int,
+    day_date: date,
+    specs: list[tuple[Place, str]],
+) -> PlanDayResponse:
+    items: list[PlanItemResponse] = []
+    for _idx, (place, clock) in enumerate(specs):
+        start = datetime.combine(day_date, datetime.min.time()).replace(
+            hour=int(clock[:2]), minute=int(clock[3:])
+        )
+        end = datetime.combine(day_date, datetime.min.time()).replace(
+            hour=int(clock[:2]) + 1, minute=int(clock[3:])
+        )
+        items.append(
+            PlanItemResponse(
+                id=str(uuid.uuid4()),
+                place_id=place.place_id,
+                place=PlaceResponse.model_validate(place),
+                day_index=day_index,
+                start_time=start,
+                end_time=end,
+                cost=place.est_cost,
+            )
+        )
+    return PlanDayResponse(date=day_date, day_index=day_index, items=items)
+
+
+def test_enforce_drops_identical_place_time_across_days():
+    """A venue must never appear at the same clock time on multiple days."""
+    bokor = _place("Bokor Hill Station", "landmark", 5)
+    other = _place("Kampot Old Town", "landmark", 0)
+    pool = [bokor, other] + [_place(n, "restaurant", 10) for n in ("A", "B")]
+
+    days = [
+        _day(0, date(2026, 1, 1), [(bokor, "09:30"), (other, "15:00")]),
+        _day(1, date(2026, 1, 2), [(bokor, "09:30")]),
+        _day(2, date(2026, 1, 3), [(bokor, "09:30")]),
+    ]
+
+    result = enforce_schedule_uniqueness(days, pool)
+    occurrences = [
+        (d.day_index, it.place_id, it.start_time.strftime("%H:%M"))
+        for d in result
+        for it in d.items
+    ]
+    bokor_times = [clock for (_, pid, clock) in occurrences if pid == bokor.place_id]
+    assert bokor_times == ["09:30"]
+    assert len(result[0].items) == 2
+    assert len(result[1].items) == 0
+    assert len(result[2].items) == 0
+
+
+def test_enforce_strict_mode_removes_all_cross_day_repeats():
+    """When the pool can fill the schedule, venues never repeat across days."""
+    pool = [_place(f"Place {i}", "landmark", i) for i in range(10)]
+    p0 = pool[0]
+    days = [
+        _day(0, date(2026, 1, 1), [(p0, "09:30")]),
+        _day(1, date(2026, 1, 2), [(p0, "19:00")]),  # different time, still dropped
+    ]
+    result = enforce_schedule_uniqueness(days, pool)
+    all_ids = [it.place_id for d in result for it in d.items]
+    assert len(all_ids) == 1  # repeated venue removed entirely
+
+
+def test_enforce_lenient_removes_all_cross_day_repeats():
+    """Small pools de-duplicate every venue, including dining repeats."""
+    pool = [
+        _place("Harbour Bistro", "restaurant", 20),
+        _place("Bokor Viewpoint", "viewpoint", 0),
+    ]
+    bistro = pool[0]
+    days = [
+        _day(0, date(2026, 1, 1), [(bistro, "12:30")]),
+        _day(1, date(2026, 1, 2), [(bistro, "19:00")]),
+        _day(2, date(2026, 1, 3), [(bistro, "12:30")]),
+    ]
+    result = enforce_schedule_uniqueness(days, pool)
+    kept_times = [
+        it.start_time.strftime("%H:%M")
+        for d in result
+        for it in d.items
+        if it.place_id == bistro.place_id
+    ]
+    assert kept_times == ["12:30"]
+    assert all(len(d.items) == 0 for d in result[1:])
+
+
+def test_enforce_strict_rescues_only_dining_option_on_meatless_day():
+    """Strict mode restores a repeated dining venue when a day would lose its
+    only meal option, at a gap-safe clock time."""
+    bistro = _place("Harbour Bistro", "restaurant", 20)
+    pool = [
+        bistro,
+        _place("Arc de Triomphe", "landmark", 10),
+        _place("Louvre", "museum", 17),
+        _place("Pont Alexandre", "landmark", 0),
+        _place("Panthéon", "historic", 11),
+        _place("Seine Cruise", "entertainment", 25),
+        _place("Opera Garnier", "entertainment", 20),
+        _place("Rodin Museum", "museum", 14),
+        _place("Sacré-Cœur", "landmark", 8),
+    ]
+    days = [
+        _day(
+            0,
+            date(2026, 1, 1),
+            [(pool[1], "09:30"), (bistro, "12:30"), (pool[2], "15:00")],
+        ),
+        _day(
+            1,
+            date(2026, 1, 2),
+            [(pool[3], "09:30"), (bistro, "12:30"), (pool[2], "15:00")],
+        ),
+        _day(
+            2,
+            date(2026, 1, 3),
+            [(pool[4], "09:30"), (bistro, "12:30"), (pool[5], "15:00")],
+        ),
+    ]
+    result = enforce_schedule_uniqueness(days, pool)
+    day2 = result[1]
+    bistro_items = [it for it in day2.items if it.place_id == bistro.place_id]
+    assert len(bistro_items) == 1
+    bistro_clock = bistro_items[0].start_time.strftime("%H:%M")
+    assert bistro_clock != "12:30"
+    clocks = sorted(it.start_time.strftime("%H:%M") for it in day2.items)
+    assert len(clocks) == len(set(clocks))
+    assert any(it.place and it.place.category in FOOD_CATEGORIES for it in day2.items)

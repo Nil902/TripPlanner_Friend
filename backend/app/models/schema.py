@@ -314,6 +314,15 @@ class RefinePlanRequest(BaseModel):
     user_id: str | None = None
 
 
+class AskAgentRequest(BaseModel):
+    question: str
+
+
+class AskAgentResponse(BaseModel):
+    question: str
+    answer: str
+
+
 # --- Disruption & Rebalance ---
 class DisruptionEvent(BaseModel):
     type: DisruptionType

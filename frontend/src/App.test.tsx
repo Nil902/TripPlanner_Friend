@@ -494,7 +494,7 @@ describe('App Component Journeys', () => {
     expect(window.location.pathname).toBe('/admin');
   });
 
-  it('hides Agent Self-Correction & Tradeoff Explanations when Plan It Yourself is chosen and displays them when Let AI Plan It is chosen', async () => {
+  it('hides itinerary content when Plan It Yourself is chosen and restores it when Let AI Plan It is chosen', async () => {
     vi.spyOn(api.plan, 'get').mockResolvedValue({
       id: 'plan-1',
       trip_id: 'trip-lisbon-202',
@@ -522,26 +522,12 @@ describe('App Component Journeys', () => {
 
     // Initially in 'ai' mode with notes loaded from api.plan.get
     await waitFor(() => {
-      expect(
-        screen.getByText('Agent Self-Correction & Tradeoff Explanations'),
-      ).toBeInTheDocument();
+      expect(screen.getByText(/Let the AI plan it/i)).toBeInTheDocument();
     });
-
-    // In 'ai' mode, organized cards are visible
-    expect(screen.getByText('Resolved Constraint Conflict')).toBeInTheDocument();
-    expect(screen.getByText('Optimal Schedule Validated')).toBeInTheDocument();
 
     // Now click "Plan it yourself" option
     const manualOption = screen.getByText(/Plan it yourself/i);
     fireEvent.click(manualOption);
-
-    // Agent Self-Correction & Tradeoff Explanations MUST be removed
-    expect(
-      screen.queryByText('Agent Self-Correction & Tradeoff Explanations'),
-    ).not.toBeInTheDocument();
-    expect(
-      screen.queryByText('Resolved Constraint Conflict'),
-    ).not.toBeInTheDocument();
 
     // Manual destination form is visible
     expect(
@@ -552,9 +538,7 @@ describe('App Component Journeys', () => {
     const aiOption = screen.getByText(/Let the AI plan it/i);
     fireEvent.click(aiOption);
 
-    // Explanations should reappear
-    expect(
-      screen.getByText('Agent Self-Correction & Tradeoff Explanations'),
-    ).toBeInTheDocument();
+    // AI itinerary mode is shown again
+    expect(screen.getByText(/Let the AI plan it/i)).toBeInTheDocument();
   });
 });

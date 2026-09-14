@@ -7,6 +7,8 @@ from sqlmodel import Session, col, select
 
 from app.core.db import get_session
 from app.models.schema import (
+    AskAgentRequest,
+    AskAgentResponse,
     Constraint,
     CreatePlanItemRequest,
     Place,
@@ -26,7 +28,11 @@ from app.models.schema import (
 )
 from app.services.agent_planner import AgentPlanner, create_plan_response
 from app.services.places_service import get_or_create_places_for_destination
-from app.services.proposer import build_day_dates
+from app.services.proposer import (
+    FOOD_CATEGORIES,
+    build_day_dates,
+    call_gemini_ask,
+)
 from app.validators.budget_validator import check_budget
 from app.validators.open_hours_validator import check_open_hours
 from app.validators.travel_validator import check_travel_time
@@ -430,7 +436,7 @@ def validate_current_plan(
         select(Constraint).where(Constraint.trip_id == trip_id)
     ).all()
 
-    budget_issues = check_budget(plan_resp.days, list(constraints))
+    budget_issues = check_budget(plan_resp.days, list(constraints), num_members=len(constraints))
     travel_issues = check_travel_time(plan_resp.days)
     hours_issues = check_open_hours(plan_resp.days)
 
@@ -493,6 +499,119 @@ def refine_plan(
         instruction=instruction,
         user_id=req.user_id,
     )
+
+
+@router.post("/ask", response_model=AskAgentResponse)
+def ask_agent(
+    trip_id: str,
+    req: AskAgentRequest,
+    session: Session = Depends(get_session),
+):
+    """
+    Ask the AI agent an open-ended question about the destination or itinerary,
+    e.g. 'Which places are the most popular to visit?' or 'Where is the best
+    seafood within our $30 lunch budget?'.
+
+    Uses the LLM when configured; falls back to a deterministic recommendation
+    otherwise. Answers are advisory only and do not modify the plan.
+    """
+    trip = session.get(Trip, trip_id)
+    if not trip:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={
+                "code": "TRIP_NOT_FOUND",
+                "message": f"Trip '{trip_id}' not found.",
+            },
+        )
+
+    question = req.question.strip()
+    if not question:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={
+                "code": "INVALID_QUESTION",
+                "message": "Question cannot be empty.",
+            },
+        )
+
+    candidate_places = get_or_create_places_for_destination(session, trip.destination)
+
+    plan = session.exec(
+        select(Plan).where(Plan.trip_id == trip_id).order_by(col(Plan.version).desc())
+    ).first()
+    plan_days = assemble_plan_response(session, trip, plan).days if plan else None
+
+    answer = call_gemini_ask(
+        trip=trip,
+        places=candidate_places,
+        plan_days=plan_days,
+        question=question,
+    )
+    if not answer:
+        answer = _fallback_ask_answer(trip, candidate_places, question)
+
+    return AskAgentResponse(question=question, answer=answer)
+
+
+def _fallback_ask_answer(
+    trip: Trip,
+    places: list[Place],
+    question: str,
+) -> str:
+    """Deterministic recommendation response when the LLM is unavailable."""
+    if not places:
+        return (
+            f"No venue data is available yet for {trip.destination}. "
+            "Generate a plan first so the agent can recommend the best spots."
+        )
+
+    q = question.lower()
+    lines: list[str] = [f"Here is a quick guide for {trip.destination}:", ""]
+    seen_names: set[str] = set()
+
+    def add_bullet(name: str, detail: str) -> None:
+        key = name.lower().strip()
+        if not key or key in seen_names:
+            return
+        seen_names.add(key)
+        lines.append(f"- {name} — {detail}")
+
+    if any(
+        w in q
+        for w in (
+            "popular",
+            "best",
+            "top",
+            "must",
+            "famous",
+            "recommend",
+            "see",
+            "visit",
+        )
+    ):
+        attractions = [p for p in places if p.category not in FOOD_CATEGORIES]
+        dining = [p for p in places if p.category in FOOD_CATEGORIES]
+        for p in attractions[:4]:
+            cost = "$0 (free)" if p.est_cost == 0 else f"${p.est_cost:.0f}"
+            add_bullet(p.name, f"{p.category}, {cost}")
+        if dining:
+            lines.append("")
+            lines.append("Best places to eat:")
+            for p in dining[:3]:
+                lines.append(f"- {p.name} — ${p.est_cost:.0f}")
+
+    cheap = [p for p in places if p.est_cost <= 30]
+    if any(w in q for w in ("cheap", "budget", "affordable", "free")) and cheap:
+        lines.append("")
+        lines.append("Budget-friendly picks:")
+        for p in sorted(cheap, key=lambda x: x.est_cost)[:3]:
+            add_bullet(p.name, "free" if p.est_cost == 0 else f"${p.est_cost:.0f}")
+
+    if len(lines) <= 2:
+        lines.append(f"Top venue to visit: {places[0].name} ({places[0].category}).")
+
+    return "\n".join(lines)
 
 
 @router.get("/export.ics")

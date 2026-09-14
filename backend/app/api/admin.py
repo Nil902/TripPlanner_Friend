@@ -115,7 +115,9 @@ def get_admin_overview(
     creators_count = len(users)
 
     plans = session.exec(select(Plan)).all()
-    llm_calls = sum(p.version for p in plans) if plans else 0
+    # Each Plan record represents one agent generation run.
+    # Summing versions inflates the count (a v5 plan would count as 5 calls).
+    llm_calls = len(plans)
     total_spend = round(llm_calls * 0.05, 2)
 
     # Calculate a rough success rate based on invalid plans
@@ -306,9 +308,9 @@ def get_api_usage(
     plan_items_count = len(session.exec(select(PlanItem)).all())
     distance_calls = max(0, plan_items_count * 2)
 
-    # Estimate LLM calls based on number of plans + versions
+    # Estimate LLM calls: one call per plan generation run
     plans = session.exec(select(Plan)).all()
-    llm_calls = sum(p.version for p in plans) if plans else 0
+    llm_calls = len(plans)
 
     # Calculate costs
     llm_cost = round(llm_calls * 0.05, 2)  # Assume $0.05 per LLM generation

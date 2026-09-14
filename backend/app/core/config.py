@@ -24,8 +24,14 @@ class Settings(BaseSettings):
     GEMINI_API_KEY: str = ""
     OPENAI_API_KEY: str = ""
     REDIS_URL: str = "redis://localhost:6379/0"
-    LLM_MODEL_NAME: str = "gemini-3.6-flash"
+    LLM_MODEL_NAME: str = "gemini-3.1-flash-lite"
     MAX_PLANNER_ITERATIONS: int = 5
+
+    # Default platform admin account (seeded on first startup)
+    # Leave both empty to skip seeding — recommended for production unless
+    # you explicitly want an admin account bootstrapped.
+    ADMIN_EMAIL: str = ""
+    ADMIN_PASSWORD: str = ""
 
     @property
     def cors_origins_list(self) -> list[str]:

@@ -12,6 +12,7 @@ import type {
   CreateExpenseRequest,
   UpdateExpenseRequest,
   DisruptionEvent,
+  AskAgentResponse,
 } from '@shared/types';
 
 const BASE =
@@ -145,6 +146,16 @@ async function request<T>(
     throw new Error(message);
   }
 
+  // 204 No Content and 205 Reset Content have empty bodies — don't attempt JSON parse.
+  if (res.status === 204 || res.status === 205) {
+    return {} as T;
+  }
+
+  const contentType = res.headers.get('content-type') ?? '';
+  if (!contentType.includes('application/json')) {
+    return {} as T;
+  }
+
   return res.json() as Promise<T>;
 }
 
@@ -229,6 +240,10 @@ export const api = {
       api.post<Plan>(`/api/v1/trips/${tripId}/rebalance`, event),
     refine: (tripId: string, data: { instruction: string; user_id?: string }) =>
       api.post<Plan>(`/api/v1/trips/${tripId}/plan/refine`, data),
+    ask: (tripId: string, question: string) =>
+      api.post<AskAgentResponse>(`/api/v1/trips/${tripId}/plan/ask`, {
+        question,
+      }),
     getExportIcsUrl: (tripId: string) =>
       `${BASE}/api/v1/trips/${tripId}/plan/export.ics`,
   },

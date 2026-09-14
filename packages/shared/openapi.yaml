@@ -438,6 +438,30 @@ paths:
               schema:
                 $ref: "#/components/schemas/Plan"
 
+  /api/v1/trips/{trip_id}/plan/ask:
+    post:
+      summary: Ask the AI agent a question about the destination or itinerary
+      operationId: askPlanAgent
+      parameters:
+        - name: trip_id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AskAgentRequest"
+      responses:
+        "200":
+          description: Advisory answer from the agent
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AskAgentResponse"
+
   /api/v1/trips/{trip_id}/plan/export.ics:
     get:
       summary: Export trip itinerary as an RFC 5545 iCalendar (.ics) file
@@ -1121,6 +1145,25 @@ components:
         instruction:
           type: string
         user_id:
+          type: string
+
+    AskAgentRequest:
+      type: object
+      required:
+        - question
+      properties:
+        question:
+          type: string
+
+    AskAgentResponse:
+      type: object
+      required:
+        - question
+        - answer
+      properties:
+        question:
+          type: string
+        answer:
           type: string
 
     ValidationIssue:

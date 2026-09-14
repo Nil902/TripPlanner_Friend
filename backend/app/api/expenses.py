@@ -137,7 +137,17 @@ def update_expense(
             },
         )
 
+    trip = session.get(Trip, expense.trip_id)
+
     if req.paid_by is not None:
+        if trip and req.paid_by not in trip.member_ids:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail={
+                    "code": "NOT_A_MEMBER",
+                    "message": "Payer must be a member of the trip.",
+                },
+            )
         expense.paid_by = req.paid_by
     if req.amount is not None:
         expense.amount = req.amount

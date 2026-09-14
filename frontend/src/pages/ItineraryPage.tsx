@@ -12,13 +12,13 @@ import {
 import { SecondaryButton } from '../components/Button';
 import InteractiveMap from '../components/InteractiveMap';
 import RebalanceModal from '../components/RebalanceModal';
-import AgentExplanations from '../components/AgentExplanations';
 import DayPicker from '../components/itinerary/DayPicker';
 import RefinementAssistant from '../components/itinerary/RefinementAssistant';
 import DisruptionDiffReport from '../components/itinerary/DisruptionDiffReport';
 import ValidationBadge from '../components/itinerary/ValidationBadge';
 import AddStopForm from '../components/itinerary/AddStopForm';
 import StopTimeline from '../components/itinerary/StopTimeline';
+import AgentAskPanel from '../components/AgentAskPanel';
 import { api } from '../lib/api';
 
 /** Convert a 24h "HH:MM" string to "H:MM AM/PM" display format */
@@ -398,14 +398,8 @@ export default function ItineraryPage({ tripId, planMode = 'ai' }: ItineraryPage
         onRefined={handleRefined}
       />
 
-      {/* Agent Self-Correction & Tradeoff Explanations (Shown in 'ai' plan mode, removed in 'manual' plan mode) */}
-      {planMode === 'ai' && notes && notes.length > 0 && (
-        <AgentExplanations
-          notes={notes}
-          title="Agent Self-Correction & Tradeoff Explanations"
-          style={{ marginBottom: 16 }}
-        />
-      )}
+      {/* Interactive Ask-the-Agent Q&A Panel */}
+      <AgentAskPanel tripId={tripId} />
 
       {/* Interactive Map Visualizing Spatial Geometry */}
       <InteractiveMap stops={currentStops} dayIndex={day} />

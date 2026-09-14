@@ -25,7 +25,7 @@ import {
 } from '../lib/constants';
 import Avatar from '../components/Avatar';
 import { PrimaryButton, SecondaryButton } from '../components/Button';
-import AgentExplanations from '../components/AgentExplanations';
+
 import { api } from '../lib/api';
 
 const DESTINATION_SUGGESTIONS: Record<string, Array<{ name: string; category: string; cost: number }>> = {
@@ -79,7 +79,6 @@ export default function OverviewPage({
   const [showQRModal, setShowQRModal] = useState(false);
   const [isGenerating, setIsGenerating] = useState(false);
   const [generationStep, setGenerationStep] = useState<string | null>(null);
-  const [agentNotes, setAgentNotes] = useState<string[]>([]);
 
   // Manual "Plan it yourself" destination visit form state
   const [manualDay, setManualDay] = useState<number>(1);
@@ -106,9 +105,6 @@ export default function OverviewPage({
     api.plan
       .get(trip.id)
       .then((plan) => {
-        if (plan?.notes && plan.notes.length > 0) {
-          setAgentNotes(plan.notes);
-        }
         if (plan?.days) {
           const list: Array<{ id?: string; day: number; name: string; time: string; cost: number; category: string }> = [];
           for (const d of plan.days) {
@@ -246,10 +242,7 @@ export default function OverviewPage({
     }, 1500);
 
     try {
-      const res = await api.plan.generate(trip.id);
-      if (res?.notes && res.notes.length > 0) {
-        setAgentNotes(res.notes);
-      }
+      await api.plan.generate(trip.id);
     } catch {
       // Keep rich fallback notes
     } finally {
@@ -868,16 +861,6 @@ export default function OverviewPage({
       </div>
 
 
-
-      {/* Agent Self-Correction & Tradeoff Explanations (Shown in 'ai' plan mode, removed in 'manual' plan mode) */}
-      {planMode === 'ai' && agentNotes.length > 0 && (
-        <div style={{ marginTop: 28 }}>
-          <AgentExplanations
-            notes={agentNotes}
-            title="Agent Self-Correction & Tradeoff Explanations"
-          />
-        </div>
-      )}
 
       {showQRModal && (
         <div

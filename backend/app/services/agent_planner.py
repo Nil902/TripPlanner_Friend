@@ -37,6 +37,7 @@ from .proposer import (
     build_day_dates,
     call_gemini_proposer,
     create_plan_response,
+    enforce_schedule_uniqueness,
     propose_schedule,
 )
 from .rebalancer import rebalance
@@ -133,8 +134,14 @@ class AgentPlanner:
                     replacement_attempts=replacement_attempts,
                 )
 
+            # Hard trip-wide guarantee: never schedule the same venue at the same
+            # time twice, and prefer unique venues across the whole trip.
+            proposed_days = enforce_schedule_uniqueness(proposed_days, usable_places)
+
             # Validate proposed candidate
-            budget_issues = check_budget(proposed_days, constraints, budget_tolerance)
+            budget_issues = check_budget(
+                proposed_days, constraints, budget_tolerance, num_members=len(constraints)
+            )
             travel_issues = check_travel_time(proposed_days)
             hours_issues = check_open_hours(proposed_days)
 
@@ -181,9 +188,10 @@ class AgentPlanner:
                 must_sees=must_sees,
                 replacement_attempts=replacement_attempts,
             )
+            relaxed_days = enforce_schedule_uniqueness(relaxed_days, usable_places)
             relaxed_errors = [
                 i
-                for i in check_budget(relaxed_days, constraints, budget_tolerance)
+                for i in check_budget(relaxed_days, constraints, budget_tolerance, num_members=len(constraints))
                 + check_travel_time(relaxed_days)
                 + check_open_hours(relaxed_days)
                 if i.severity == "error"
@@ -192,7 +200,7 @@ class AgentPlanner:
                 best_days = relaxed_days
             status = ValidationStatus.PARTIAL
             notes.append(
-                "Reached maximum iterations (5). Applied Section 9.2 Constraint Relaxation: "
+                f"Reached maximum iterations ({cls.MAX_ITERATIONS}). Applied Section 9.2 Constraint Relaxation: "
                 "Relaxed daily budget cap by 15% to preserve must-see attractions without dropping key venues."
             )
 
@@ -595,8 +603,13 @@ class AgentPlanner:
                     )
                 )
 
+        # Enforce trip-wide uniqueness before validation
+        refined_days = enforce_schedule_uniqueness(refined_days, candidate_places)
+
         # Validate refined plan
-        budget_issues = check_budget(refined_days, list(constraints))
+        budget_issues = check_budget(
+            refined_days, list(constraints), num_members=len(constraints)
+        )
         travel_issues = check_travel_time(refined_days)
         hours_issues = check_open_hours(refined_days)
         all_issues = budget_issues + travel_issues + hours_issues

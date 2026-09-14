@@ -12,7 +12,8 @@ export type TripStatus =
   | "collecting_constraints"
   | "planned"
   | "in_progress"
-  | "completed";
+  | "completed"
+  | "flagged";
 
 export type ValidationStatus = "valid" | "invalid" | "partial";
 
@@ -176,6 +177,7 @@ export interface User {
   id: string;
   email: string;
   name: string;
+  is_admin?: boolean;
   created_at: string;
 }
 
@@ -231,6 +233,15 @@ export interface RefinePlanRequest {
   user_id?: string;
 }
 
+export interface AskAgentRequest {
+  question: string;
+}
+
+export interface AskAgentResponse {
+  question: string;
+  answer: string;
+}
+
 export interface UpdateExpenseRequest {
   paid_by?: string;
   amount?: number;
@@ -244,7 +255,7 @@ export interface Member {
   name: string;
   initials: string;
   submitted: boolean;
-  role: 'creator' | 'joiner' | string;
+  role: 'creator' | 'joiner';
 }
 
 export type MemberResponse = Member;
@@ -257,7 +268,7 @@ export interface JoinTripRequest {
 export interface TripPermissions {
   can_manage: boolean;
   is_creator: boolean;
-  role: 'creator' | 'joiner' | string;
+  role: 'creator' | 'joiner';
 }
 
 export type TripPermissionsResponse = TripPermissions;

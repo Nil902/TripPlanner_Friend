@@ -2,11 +2,15 @@
 Database engine and session dependency using SQLModel and SQLite.
 """
 
+import logging
 from collections.abc import Generator
 
 from sqlmodel import Session, SQLModel, create_engine
 
 from app.core.config import settings
+
+logger = logging.getLogger(__name__)
+
 
 # SQLite connection args for multi-threaded FastAPI dev server
 connect_args = {"check_same_thread": False} if "sqlite" in settings.DATABASE_URL else {}
@@ -51,24 +55,38 @@ def init_db() -> None:
                 )
                 conn.commit()
 
-    # Seed default platform admin account if none exists
-    from sqlmodel import select
+    # Seed default platform admin account from env vars only.
+    # ADMIN_EMAIL and ADMIN_PASSWORD must both be explicitly set.
+    # If neither is provided, no default admin is created — preventing
+    # well-known credentials from existing on unattended deployments.
+    admin_email = settings.ADMIN_EMAIL.strip() if settings.ADMIN_EMAIL else ""
+    admin_password = settings.ADMIN_PASSWORD.strip() if settings.ADMIN_PASSWORD else ""
 
-    from app.core.security import hash_password
+    if admin_email and admin_password:
+        from sqlmodel import select
 
-    with Session(engine) as session:
-        admin_user = session.exec(
-            select(User).where(User.email == "admin@antigravity.travel")
-        ).first()
-        if not admin_user:
-            admin_user = User(
-                email="admin@antigravity.travel",
-                name="Platform Administrator",
-                hashed_password=hash_password("admin12345"),
-                is_admin=True,
-            )
-            session.add(admin_user)
-            session.commit()
+        from app.core.security import hash_password
+
+        with Session(engine) as session:
+            admin_user = session.exec(
+                select(User).where(User.email == admin_email.lower())
+            ).first()
+            if not admin_user:
+                admin_user = User(
+                    email=admin_email.lower(),
+                    name="Platform Administrator",
+                    hashed_password=hash_password(admin_password),
+                    is_admin=True,
+                )
+                session.add(admin_user)
+                session.commit()
+                logger.info("Default admin account created: %s", admin_email)
+    else:
+        logger.warning(
+            "ADMIN_EMAIL and ADMIN_PASSWORD are not set. "
+            "No default admin account will be seeded. "
+            "Set both in .env to enable the admin panel."
+        )
 
 
 def get_session() -> Generator[Session, None, None]:

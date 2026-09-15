@@ -151,7 +151,7 @@ async function request<T>(
     return {} as T;
   }
 
-  const contentType = res.headers.get('content-type') ?? '';
+  const contentType = res.headers?.get('content-type') ?? '';
   if (!contentType.includes('application/json')) {
     return {} as T;
   }

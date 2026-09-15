@@ -1,4 +1,5 @@
 import type { CSSProperties } from 'react';
+import type { TripStatus } from '@shared/types';
 
 // Design tokens — mirrors App.jsx warm paper & Georgia serif aesthetic
 export const INK = '#24211C';
@@ -143,7 +144,7 @@ export interface TripSummary {
   start_date: string;
   end_date: string;
   creator_id: string;
-  status: 'collecting_constraints' | 'planned' | 'in_progress' | 'completed';
+  status: TripStatus;
   member_ids: string[];
 }
 

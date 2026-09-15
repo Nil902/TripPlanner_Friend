@@ -436,7 +436,9 @@ def validate_current_plan(
         select(Constraint).where(Constraint.trip_id == trip_id)
     ).all()
 
-    budget_issues = check_budget(plan_resp.days, list(constraints), num_members=len(constraints))
+    budget_issues = check_budget(
+        plan_resp.days, list(constraints), num_members=len(constraints)
+    )
     travel_issues = check_travel_time(plan_resp.days)
     hours_issues = check_open_hours(plan_resp.days)
 
@@ -536,6 +538,9 @@ def ask_agent(
         )
 
     candidate_places = get_or_create_places_for_destination(session, trip.destination)
+    trip_constraints = list(
+        session.exec(select(Constraint).where(Constraint.trip_id == trip_id)).all()
+    )
 
     plan = session.exec(
         select(Plan).where(Plan.trip_id == trip_id).order_by(col(Plan.version).desc())
@@ -547,6 +552,7 @@ def ask_agent(
         places=candidate_places,
         plan_days=plan_days,
         question=question,
+        constraints=trip_constraints,
     )
     if not answer:
         answer = _fallback_ask_answer(trip, candidate_places, question)

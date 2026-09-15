@@ -15,7 +15,7 @@ import RebalanceModal from '../components/RebalanceModal';
 import DayPicker from '../components/itinerary/DayPicker';
 import RefinementAssistant from '../components/itinerary/RefinementAssistant';
 import DisruptionDiffReport from '../components/itinerary/DisruptionDiffReport';
-import ValidationBadge from '../components/itinerary/ValidationBadge';
+
 import AddStopForm from '../components/itinerary/AddStopForm';
 import StopTimeline from '../components/itinerary/StopTimeline';
 import AgentAskPanel from '../components/AgentAskPanel';
@@ -146,7 +146,7 @@ function convertPlanDaysToStops(
   return result;
 }
 
-export default function ItineraryPage({ tripId, planMode = 'ai' }: ItineraryPageProps) {
+export default function ItineraryPage({ tripId }: ItineraryPageProps) {
   const [day, setDay] = useState<number>(1);
   const [destination, setDestination] = useState<string>('');
   const [isRebalanceOpen, setIsRebalanceOpen] = useState(false);
@@ -385,9 +385,6 @@ export default function ItineraryPage({ tripId, planMode = 'ai' }: ItineraryPage
         diff={activeDiff}
         onDismiss={() => setActiveDiff(null)}
       />
-
-      {/* Deterministic Validation Integrity Badge */}
-      <ValidationBadge notes={notes} planMode={planMode} />
 
       {/* Natural-Language Refinement Assistant */}
       <RefinementAssistant

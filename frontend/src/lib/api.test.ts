@@ -11,6 +11,48 @@ describe('API Client Methods', () => {
     expect(url).toContain('/api/v1/trips/trip-123/plan/export.ics');
   });
 
+  it('returns empty object for 204 No Content without calling .json()', async () => {
+    const jsonSpy = vi.fn();
+    vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce({
+      ok: true,
+      status: 204,
+      headers: { get: () => null },
+      json: jsonSpy,
+    } as unknown as Response);
+
+    const result = await api.del('/api/v1/trips/trip-123');
+    expect(result).toEqual({});
+    expect(jsonSpy).not.toHaveBeenCalled();
+  });
+
+  it('returns empty object for 205 Reset Content without calling .json()', async () => {
+    const jsonSpy = vi.fn();
+    vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce({
+      ok: true,
+      status: 205,
+      headers: { get: () => null },
+      json: jsonSpy,
+    } as unknown as Response);
+
+    const result = await api.del('/api/v1/trips/trip-123');
+    expect(result).toEqual({});
+    expect(jsonSpy).not.toHaveBeenCalled();
+  });
+
+  it('returns empty object when content-type is not JSON', async () => {
+    const jsonSpy = vi.fn();
+    vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce({
+      ok: true,
+      status: 200,
+      headers: { get: () => 'text/plain' },
+      json: jsonSpy,
+    } as unknown as Response);
+
+    const result = await api.get('/api/v1/trips/trip-123/plan/export.ics');
+    expect(result).toEqual({});
+    expect(jsonSpy).not.toHaveBeenCalled();
+  });
+
   it('calls refine endpoint with proper payload', async () => {
     const mockPlan = {
       id: 'plan-1',
@@ -24,8 +66,10 @@ describe('API Client Methods', () => {
 
     const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce({
       ok: true,
+      status: 200,
+      headers: { get: () => 'application/json' },
       json: async () => mockPlan,
-    } as Response);
+    } as unknown as Response);
 
     const result = await api.plan.refine('trip-123', {
       instruction: 'Make day 2 more relaxed',

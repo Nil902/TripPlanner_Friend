@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import {
   Sparkles,
   MapPin,
@@ -12,8 +12,11 @@ import {
   Trash2,
   ArrowRight,
   Clock,
+  Copy,
+  Download,
+  X,
 } from 'lucide-react';
-import { QRCodeSVG } from 'qrcode.react';
+import { QRCodeCanvas } from 'qrcode.react';
 import {
   BORDER,
   MUTED,
@@ -76,7 +79,11 @@ export default function OverviewPage({
   onOpenAdmin,
 }: OverviewPageProps) {
   const [copied, setCopied] = useState(false);
+  const [copiedLink, setCopiedLink] = useState(false);
+  const [copiedQR, setCopiedQR] = useState(false);
+  const [shareFeedback, setShareFeedback] = useState<string | null>(null);
   const [showQRModal, setShowQRModal] = useState(false);
+  const qrCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const [isGenerating, setIsGenerating] = useState(false);
   const [generationStep, setGenerationStep] = useState<string | null>(null);
 
@@ -219,9 +226,120 @@ export default function OverviewPage({
 
   const handleCopyLink = () => {
     const inviteUrl = `${window.location.origin}/?code=${trip.id}`;
-    navigator.clipboard?.writeText(inviteUrl);
+    if (navigator.clipboard?.writeText) {
+      navigator.clipboard.writeText(inviteUrl);
+    } else {
+      const textarea = document.createElement('textarea');
+      textarea.value = inviteUrl;
+      document.body.appendChild(textarea);
+      textarea.select();
+      document.execCommand('copy');
+      document.body.removeChild(textarea);
+    }
     setCopied(true);
-    setTimeout(() => setCopied(false), 2000);
+    setCopiedLink(true);
+    setShareFeedback('Invite link copied to clipboard!');
+    setTimeout(() => {
+      setCopied(false);
+      setCopiedLink(false);
+      setShareFeedback(null);
+    }, 2500);
+  };
+
+  const handleCopyQRImage = async () => {
+    const canvas = qrCanvasRef.current;
+    if (!canvas) {
+      handleCopyLink();
+      return;
+    }
+    try {
+      canvas.toBlob(async (blob) => {
+        if (!blob) {
+          handleCopyLink();
+          return;
+        }
+        if (navigator.clipboard?.write && typeof ClipboardItem !== 'undefined') {
+          try {
+            await navigator.clipboard.write([
+              new ClipboardItem({ 'image/png': blob }),
+            ]);
+            setCopiedQR(true);
+            setShareFeedback('QR code image copied to clipboard!');
+            setTimeout(() => {
+              setCopiedQR(false);
+              setShareFeedback(null);
+            }, 2500);
+            return;
+          } catch {
+            // Browser rejected image clipboard write; fallback to link
+          }
+        }
+        handleCopyLink();
+      }, 'image/png');
+    } catch {
+      handleCopyLink();
+    }
+  };
+
+  const handleShare = async () => {
+    const inviteUrl = `${window.location.origin}/?code=${trip.id}`;
+    const shareTitle = `Join our trip to ${trip.destination}!`;
+    const shareText = `Hey! Join our trip to ${trip.destination} on Travel Planner. Scan the QR code or click: ${inviteUrl}`;
+
+    if (navigator.share) {
+      try {
+        const canvas = qrCanvasRef.current;
+        if (canvas && navigator.canShare) {
+          const blob = await new Promise<Blob | null>((resolve) =>
+            canvas.toBlob(resolve, 'image/png')
+          );
+          if (blob) {
+            const fileName = `${trip.destination.replace(/[^a-zA-Z0-9]/g, '_')}_qr.png`;
+            const file = new File([blob], fileName, { type: 'image/png' });
+            if (navigator.canShare({ files: [file] })) {
+              await navigator.share({
+                title: shareTitle,
+                text: shareText,
+                url: inviteUrl,
+                files: [file],
+              });
+              setShareFeedback('Shared successfully!');
+              setTimeout(() => setShareFeedback(null), 2500);
+              return;
+            }
+          }
+        }
+
+        await navigator.share({
+          title: shareTitle,
+          text: shareText,
+          url: inviteUrl,
+        });
+        setShareFeedback('Shared successfully!');
+        setTimeout(() => setShareFeedback(null), 2500);
+        return;
+      } catch (err: unknown) {
+        if ((err as Error)?.name === 'AbortError') return;
+      }
+    }
+
+    handleCopyLink();
+  };
+
+  const handleDownloadQR = () => {
+    const canvas = qrCanvasRef.current;
+    if (!canvas) return;
+    try {
+      const dataUrl = canvas.toDataURL('image/png');
+      const link = document.createElement('a');
+      link.href = dataUrl;
+      link.download = `${trip.destination.replace(/[^a-zA-Z0-9]/g, '_')}_trip_qr.png`;
+      link.click();
+      setShareFeedback('QR code image downloaded!');
+      setTimeout(() => setShareFeedback(null), 2500);
+    } catch {
+      // ignore
+    }
   };
 
 
@@ -317,7 +435,7 @@ export default function OverviewPage({
 
           {/* Share Button */}
           <SecondaryButton
-            onClick={handleCopyLink}
+            onClick={handleShare}
             style={{ padding: '8px 14px', fontSize: 13 }}
           >
             {copied ? <Check size={14} color={PINE} /> : <Share2 size={14} />}
@@ -346,7 +464,7 @@ export default function OverviewPage({
           Invite code: <strong style={{ fontFamily: 'monospace' }}>{trip.id}</strong>{' '}
           (Friends join without an account)
         </span>
-        <div style={{ display: 'flex', gap: 16, alignItems: 'center' }}>
+        <div style={{ display: 'flex', gap: 14, alignItems: 'center' }}>
           <button
             type="button"
             onClick={() => setShowQRModal(true)}
@@ -365,6 +483,22 @@ export default function OverviewPage({
           </button>
           <button
             type="button"
+            onClick={handleShare}
+            style={{
+              border: 'none',
+              background: 'transparent',
+              color: PINE,
+              fontWeight: 600,
+              cursor: 'pointer',
+              display: 'flex',
+              alignItems: 'center',
+              gap: 4,
+            }}
+          >
+            <Share2 size={14} /> Share
+          </button>
+          <button
+            type="button"
             onClick={handleCopyLink}
             style={{
               border: 'none',
@@ -372,8 +506,12 @@ export default function OverviewPage({
               color: PINE,
               fontWeight: 600,
               cursor: 'pointer',
+              display: 'flex',
+              alignItems: 'center',
+              gap: 4,
             }}
           >
+            {copied ? <Check size={14} /> : <Copy size={14} />}
             {copied ? 'Copied' : 'Copy Link'}
           </button>
         </div>
@@ -870,37 +1008,219 @@ export default function OverviewPage({
             left: 0,
             right: 0,
             bottom: 0,
-            backgroundColor: 'rgba(0, 0, 0, 0.4)',
+            backgroundColor: 'rgba(0, 0, 0, 0.45)',
+            backdropFilter: 'blur(2px)',
             display: 'flex',
             alignItems: 'center',
             justifyContent: 'center',
             zIndex: 9999,
+            padding: 16,
           }}
           onClick={() => setShowQRModal(false)}
         >
           <div
             style={{
               background: '#fff',
-              padding: 32,
-              borderRadius: 16,
+              padding: '28px 24px',
+              borderRadius: 20,
               display: 'flex',
               flexDirection: 'column',
               alignItems: 'center',
               gap: 16,
-              boxShadow: '0 10px 25px rgba(0,0,0,0.1)',
+              boxShadow: '0 20px 40px rgba(0,0,0,0.15)',
+              maxWidth: 380,
+              width: '100%',
+              position: 'relative',
             }}
             onClick={(e) => e.stopPropagation()}
           >
-            <h3 style={{ margin: 0, ...SERIF, fontSize: 20 }}>Scan to Join</h3>
-            <p style={{ margin: 0, fontSize: 14, color: MUTED, textAlign: 'center', maxWidth: 220 }}>
-              Anyone scanning this can join <b>{trip.destination}</b> instantly.
-            </p>
-            <div style={{ padding: 16, border: `1px solid ${BORDER}`, borderRadius: 12, background: '#fff' }}>
-              <QRCodeSVG value={`${window.location.origin}/?code=${trip.id}`} size={200} />
+            {/* Close Button */}
+            <button
+              type="button"
+              onClick={() => setShowQRModal(false)}
+              aria-label="Close"
+              style={{
+                position: 'absolute',
+                top: 16,
+                right: 16,
+                border: 'none',
+                background: '#F4EFE6',
+                borderRadius: '50%',
+                width: 32,
+                height: 32,
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                cursor: 'pointer',
+                color: INK,
+              }}
+            >
+              <X size={16} />
+            </button>
+
+            <div style={{ textAlign: 'center' }}>
+              <h3 style={{ margin: 0, ...SERIF, fontSize: 22, color: INK }}>Scan to Join</h3>
+              <p style={{ margin: '6px 0 0 0', fontSize: 13, color: MUTED, lineHeight: 1.4 }}>
+                Friends can scan with their camera to join <b>{trip.destination}</b> instantly.
+              </p>
             </div>
-            <SecondaryButton onClick={() => setShowQRModal(false)} style={{ width: '100%', marginTop: 8 }}>
-              Close
-            </SecondaryButton>
+
+            {/* QR Code Canvas */}
+            <div
+              style={{
+                padding: 16,
+                border: `1px solid ${BORDER}`,
+                borderRadius: 16,
+                background: '#fff',
+                boxShadow: '0 4px 12px rgba(0,0,0,0.04)',
+                display: 'flex',
+                flexDirection: 'column',
+                alignItems: 'center',
+                gap: 10,
+              }}
+            >
+              <QRCodeCanvas
+                ref={qrCanvasRef}
+                value={`${window.location.origin}/?code=${trip.id}`}
+                size={200}
+                level="M"
+                marginSize={1}
+              />
+              <div
+                style={{
+                  fontSize: 12,
+                  fontFamily: 'monospace',
+                  background: '#FAF6EE',
+                  padding: '4px 10px',
+                  borderRadius: 6,
+                  border: `1px solid ${BORDER}`,
+                  color: INK,
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: 6,
+                }}
+              >
+                <span>Code: <b>{trip.id}</b></span>
+              </div>
+            </div>
+
+            {/* Feedback notification toast */}
+            {shareFeedback && (
+              <div
+                role="status"
+                style={{
+                  fontSize: 12,
+                  fontWeight: 600,
+                  color: PINE,
+                  background: '#EEF3ED',
+                  border: '1px solid #D5E2D4',
+                  padding: '6px 12px',
+                  borderRadius: 8,
+                  textAlign: 'center',
+                  width: '100%',
+                  boxSizing: 'border-box',
+                }}
+              >
+                {shareFeedback}
+              </div>
+            )}
+
+            {/* Actions Grid */}
+            <div style={{ width: '100%', display: 'flex', flexDirection: 'column', gap: 8 }}>
+              {/* Primary Share with Friends */}
+              <button
+                type="button"
+                onClick={handleShare}
+                style={{
+                  width: '100%',
+                  padding: '10px 14px',
+                  borderRadius: 10,
+                  background: PINE,
+                  color: '#fff',
+                  border: 'none',
+                  fontWeight: 600,
+                  fontSize: 14,
+                  cursor: 'pointer',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  gap: 8,
+                }}
+              >
+                <Share2 size={16} /> Share with Friends
+              </button>
+
+              {/* 2-column: Copy QR Image & Copy Link */}
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
+                <button
+                  type="button"
+                  onClick={handleCopyQRImage}
+                  title="Copy QR image to clipboard to paste in chats"
+                  style={{
+                    padding: '8px 10px',
+                    borderRadius: 8,
+                    background: copiedQR ? '#EEF3ED' : '#FAF6EE',
+                    border: `1px solid ${copiedQR ? '#D5E2D4' : BORDER}`,
+                    color: copiedQR ? PINE : INK,
+                    fontWeight: 500,
+                    fontSize: 12,
+                    cursor: 'pointer',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    gap: 6,
+                  }}
+                >
+                  {copiedQR ? <Check size={14} /> : <Copy size={14} />}
+                  {copiedQR ? 'Copied QR!' : 'Copy QR'}
+                </button>
+
+                <button
+                  type="button"
+                  onClick={handleCopyLink}
+                  title="Copy invite web link to clipboard"
+                  style={{
+                    padding: '8px 10px',
+                    borderRadius: 8,
+                    background: copiedLink ? '#EEF3ED' : '#FAF6EE',
+                    border: `1px solid ${copiedLink ? '#D5E2D4' : BORDER}`,
+                    color: copiedLink ? PINE : INK,
+                    fontWeight: 500,
+                    fontSize: 12,
+                    cursor: 'pointer',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    gap: 6,
+                  }}
+                >
+                  {copiedLink ? <Check size={14} /> : <Copy size={14} />}
+                  {copiedLink ? 'Copied Link!' : 'Copy Link'}
+                </button>
+              </div>
+
+              {/* Download PNG button */}
+              <button
+                type="button"
+                onClick={handleDownloadQR}
+                style={{
+                  padding: '8px 12px',
+                  borderRadius: 8,
+                  background: 'transparent',
+                  border: `1px solid ${BORDER}`,
+                  color: MUTED,
+                  fontWeight: 500,
+                  fontSize: 12,
+                  cursor: 'pointer',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  gap: 6,
+                }}
+              >
+                <Download size={14} /> Download QR PNG
+              </button>
+            </div>
           </div>
         </div>
       )}

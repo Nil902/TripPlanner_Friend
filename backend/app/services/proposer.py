@@ -207,17 +207,6 @@ def call_gemini_proposer(
 
     try:
         place_dict = {p.place_id: p for p in places}
-        places_summary = [
-            {
-                "place_id": p.place_id,
-                "name": p.name,
-                "category": p.category,
-                "est_cost": p.est_cost,
-                "lat": p.lat,
-                "lng": p.lng,
-            }
-            for p in places
-        ]
 
         constraints_summary = [
             {
@@ -231,56 +220,82 @@ def call_gemini_proposer(
             for c in constraints
         ]
 
-        prompt_parts = [
-            "You are an autonomous AI travel planning agent.",
-            f"Destination: {trip.destination}",
-            f"Trip Dates: {[d.isoformat() for d in day_dates]}",
-            f"Candidate Places Pool: {json.dumps(places_summary)}",
-            f"Group Member Constraints: {json.dumps(constraints_summary)}",
-        ]
+        # Build a numbered catalogue so the model can reference venues clearly
+        catalogue_lines = []
+        for i, p in enumerate(places):
+            catalogue_lines.append(
+                f"  [{i + 1}] place_id={p.place_id} | {p.name} | "
+                f"category={p.category} | est_cost=${p.est_cost:.2f} | "
+                f"lat={p.lat} lng={p.lng}"
+            )
+        catalogue_text = "\n".join(catalogue_lines)
+        total_days = len(day_dates)
+        total_places = len(places)
 
+        # Collect already-used place_ids from feedback so the model can avoid them
+        used_ids_note = ""
         if feedback:
-            prompt_parts.append(
-                "Deterministic Validation Failures from previous candidate to fix:\n"
-                + "\n".join(f"- {f}" for f in feedback)
+            used_ids_note = (
+                "\n\nDeterministic Validation Failures from previous candidate — fix these:\n"
+                + "\n".join(f"  - {f}" for f in feedback)
             )
 
+        instruction_note = ""
         if instruction:
-            prompt_parts.append(f"User Natural Language Instruction: '{instruction}'")
+            instruction_note = f"\n\nUser Natural Language Instruction: '{instruction}'"
 
+        prompt_parts = [
+            "You are an autonomous AI travel planning agent. Your job is to output a "
+            "realistic, diverse, duplicate-free day-by-day itinerary in strict JSON format.",
+            f"Destination: {trip.destination}",
+            f"Trip duration: {total_days} day(s) — dates: {[d.isoformat() for d in day_dates]}",
+            f"Group Member Constraints:\n{json.dumps(constraints_summary, indent=2)}",
+            f"Candidate Places Catalogue ({total_places} venues total):\n{catalogue_text}"
+            + used_ids_note
+            + instruction_note,
+        ]
+
+        num_slots_per_day = min(5, max(3, total_places // max(total_days, 1)))
         prompt_parts.append(
-            "Generate a realistic and diverse day-by-day schedule.\n\n"
-            "CRITICAL RULES:\n"
-            "1. Each place_id may appear at most ONCE across the ENTIRE trip. "
-            "Never schedule the same venue on two different days.\n"
-            "2. If the Candidate Places Pool has fewer venues than the number of "
-            "stops needed, REDUCE the number of stops per day instead of reusing a venue. "
-            "Never repeat a venue just to fill a slot.\n"
-            "3. Never give two stops the same start_time, and never place the same "
-            "venue at the same clock time (e.g. 09:30) on different days.\n"
-            "4. Each day must include at least 3 different non-food activities "
-            "(landmarks, museums, parks, viewpoints, cultural sites, entertainment).\n"
-            "5. At most 2 food/dining stops per day (lunch and dinner). "
-            "The remaining stops must be sightseeing, culture, or entertainment.\n\n"
-            "Suggested daily structure:\n"
-            "  - Morning (09:30–11:30): sightseeing — landmark, historic site, museum, or viewpoint\n"
-            "  - Lunch (12:30–14:00): dining — restaurant, cafe, or food market\n"
-            "  - Afternoon (15:00–17:30): culture — museum, park, entertainment, or cultural attraction\n"
-            "  - Dinner (19:00–21:00): dining — restaurant or cafe\n"
-            "  - Evening (21:30–23:00): entertainment — nightlife, viewpoint, or landmark\n\n"
-            "Do NOT fill every slot with restaurants. Spread diverse attractions across the day.\n"
-            "Respond strictly with a JSON object:\n"
-            "{\n"
-            '  "days": [\n'
-            "    {\n"
-            '      "day_index": 0,\n'
-            '      "items": [\n'
-            '        {"place_id": "...", "start_time": "YYYY-MM-DDTHH:MM:SS", "end_time": "YYYY-MM-DDTHH:MM:SS", "cost": 15.0}\n'
-            "      ]\n"
-            "    }\n"
-            "  ]\n"
-            "}\n"
-            "Use only valid place_ids from the Candidate Places Pool."
+            "════════════════════════════════════════\n"
+            "HARD CONSTRAINTS — violating any of these makes the output invalid:\n"
+            "════════════════════════════════════════\n"
+            f"HC-1  NO CROSS-DAY REPEATS: Each place_id MUST appear at most ONCE across "
+            f"ALL {total_days} days combined. "
+            "If you run out of unique venues before filling all slots, REDUCE the number "
+            "of stops for that day. NEVER reuse a place_id.\n"
+            "HC-2  NO WITHIN-DAY REPEATS: Each day's items list must contain distinct place_ids.\n"
+            "HC-3  NO TIME COLLISIONS: No two items on the same day may share the same start_time.\n"
+            "HC-4  FOOD CAP: At most 2 food/dining stops per day (one lunch, one dinner). "
+            "Categories that count as food: restaurant, cafe, market.\n"
+            "HC-5  ACTIVITY MINIMUM: Each day must contain at least 2 non-food activity stops "
+            "(landmark, historic, sightseeing, museum, park, viewpoint, culture, entertainment, nightlife).\n"
+            "HC-6  CATEGORY DIVERSITY: Across the full trip, avoid scheduling the same category "
+            "for the same time-slot on consecutive days. Rotate categories each day.\n\n"
+            "════════════════════════════════════════\n"
+            "SCHEDULING TEMPLATE (adjust times slightly day-to-day to avoid monotony):\n"
+            "════════════════════════════════════════\n"
+            "  Slot A — Morning   09:00–11:30 → landmark / historic / museum / viewpoint\n"
+            "  Slot B — Lunch     12:00–13:30 → restaurant / cafe / market  (food)\n"
+            "  Slot C — Afternoon 14:30–17:00 → museum / park / entertainment / culture\n"
+            "  Slot D — Dinner    18:30–20:30 → restaurant / cafe  (food)\n"
+            "  Slot E — Evening   21:00–22:30 → entertainment / nightlife / viewpoint / landmark\n\n"
+            f"Aim for {num_slots_per_day} stops per day, but REDUCE to fewer if unique venues run low.\n\n"
+            "════════════════════════════════════════\n"
+            "OUTPUT FORMAT (respond with ONLY this JSON — no extra text, no markdown):\n"
+            "════════════════════════════════════════\n"
+            '{"days": [\n'
+            '  {"day_index": 0, "items": [\n'
+            '    {"place_id": "<exact id from catalogue>", '
+            '"start_time": "YYYY-MM-DDTHH:MM:SS", '
+            '"end_time": "YYYY-MM-DDTHH:MM:SS", '
+            '"cost": 15.0}\n'
+            "  ]},\n"
+            '  {"day_index": 1, "items": [...]},\n'
+            "  ...\n"
+            "]}\n\n"
+            "Use ONLY place_ids from the catalogue above. "
+            "Double-check: no place_id should appear more than once across all days."
         )
 
         full_prompt = "\n\n".join(prompt_parts)
@@ -314,6 +329,9 @@ def call_gemini_proposer(
                         parsed_days = parsed.get("days", [])
                         if parsed_days and isinstance(parsed_days, list):
                             result_days: list[PlanDayResponse] = []
+                            # Trip-wide dedup set: a place_id seen on any day is
+                            # excluded from all subsequent days.
+                            seen_place_ids: set[str] = set()
                             for d_idx, d_date in enumerate(day_dates):
                                 match_d = next(
                                     (
@@ -325,7 +343,6 @@ def call_gemini_proposer(
                                     None,
                                 )
                                 items: list[PlanItemResponse] = []
-                                seen_place_ids: set[str] = set()
                                 if match_d:
                                     raw_items = match_d.get("items", [])
                                     for it in raw_items:
@@ -576,8 +593,13 @@ def call_gemini_ask(
     places: list[Place],
     plan_days: list[PlanDayResponse] | None,
     question: str,
+    constraints: list[Constraint] | None = None,
 ) -> str | None:
     """Ask the AI agent an open-ended question about the destination/plan.
+
+    Uses a grounded RAG prompt: full venue catalogue + scheduled itinerary +
+    group constraints are injected so the model answers as a knowledgeable
+    local expert rather than a generic assistant.
 
     Returns a concise human-readable answer, or ``None`` if the LLM is
     unavailable so callers can fall back to a deterministic response.
@@ -586,43 +608,72 @@ def call_gemini_ask(
         return None
 
     try:
-        places_summary = [
-            {
-                "name": p.name,
-                "category": p.category,
-                "est_cost": p.est_cost,
-            }
-            for p in places
-        ]
+        # ── RAG context: full venue catalogue ──────────────────────────────────
+        venue_lines = []
+        for p in places:
+            venue_lines.append(
+                f"  - {p.name} (category={p.category}, est_cost=${p.est_cost:.2f}, "
+                f"lat={p.lat}, lng={p.lng})"
+            )
+        venue_catalogue = (
+            "\n".join(venue_lines) if venue_lines else "  (none loaded yet)"
+        )
 
-        current_plan_summary = []
+        # ── RAG context: current itinerary with rich time/day info ─────────────
+        schedule_lines: list[str] = []
         if plan_days:
             for d in plan_days:
+                day_label = f"Day {d.day_index + 1} ({d.date.isoformat() if hasattr(d.date, 'isoformat') else d.date})"
                 for it in d.items:
-                    current_plan_summary.append(
-                        {
-                            "day": d.day_index + 1,
-                            "name": it.place.name if it.place else it.place_id,
-                            "time": it.start_time.strftime("%H:%M"),
-                            "cost": it.cost,
-                        }
+                    place_name = it.place.name if it.place else it.place_id
+                    category = it.place.category if it.place else "unknown"
+                    schedule_lines.append(
+                        f"  [{day_label}] {it.start_time.strftime('%H:%M')}–"
+                        f"{it.end_time.strftime('%H:%M')} · {place_name} "
+                        f"({category}) · ${it.cost:.2f}"
                     )
+        schedule_text = (
+            "\n".join(schedule_lines)
+            if schedule_lines
+            else "  No itinerary generated yet."
+        )
 
         prompt_parts = [
-            "You are a friendly, practical AI travel assistant.",
+            "You are a knowledgeable, friendly local travel expert for the destination below. "
+            "You have deep knowledge of every venue in the confirmed catalogue and the group's "
+            "current scheduled itinerary. Answer questions in a concise, practical, and personal "
+            "tone — as if you live there. Reference specific venue names, days, and times from "
+            "the itinerary when relevant. Use bullet points for lists. Never make up venues "
+            "that are not in the catalogue.",
             f"Destination: {trip.destination}",
-            f"Confirmed candidate venues: {json.dumps(places_summary)}",
-            (
-                "Current itinerary: " + json.dumps(current_plan_summary)
-                if current_plan_summary
-                else "No itinerary generated yet."
-            ),
-            "Answer the traveler's question briefly and concretely, referencing "
-            "venues by name where relevant. Use short bullet points when listing "
-            "multiple recommendations.",
-            f"Traveler's question: {question}",
-            ('Respond strictly with JSON: {"answer": "..."}'),
+            f"Trip dates: {trip.start_date} → {trip.end_date}",
         ]
+
+        # ── RAG context: group constraints ─────────────────────────────────────
+        if constraints:
+            constraint_lines = []
+            for c in constraints:
+                parts = [f"budget ${c.budget_per_day:.0f}/day"]
+                if c.dietary:
+                    parts.append(f"dietary: {', '.join(c.dietary)}")
+                if c.style_tags:
+                    parts.append(f"style: {', '.join(c.style_tags)}")
+                if c.must_see:
+                    parts.append(f"must-see: {', '.join(c.must_see)}")
+                if c.must_avoid:
+                    parts.append(f"must-avoid: {', '.join(c.must_avoid)}")
+                constraint_lines.append(f"  - {', '.join(parts)}")
+            prompt_parts.append(
+                "Group traveler preferences:\n" + "\n".join(constraint_lines)
+            )
+
+        prompt_parts += [
+            f"Confirmed venue catalogue:\n{venue_catalogue}",
+            f"Current scheduled itinerary:\n{schedule_text}",
+            f"Traveler's question: {question}",
+            'Respond strictly with JSON: {"answer": "..."}',
+        ]
+
         full_prompt = "\n\n".join(prompt_parts)
         url = (
             f"https://generativelanguage.googleapis.com/v1beta/models/"

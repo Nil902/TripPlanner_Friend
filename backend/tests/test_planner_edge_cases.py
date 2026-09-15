@@ -42,11 +42,11 @@ def test_agent_planner_max_iterations_and_constraint_relaxation():
         session.commit()
         session.refresh(trip)
 
-        # Alice has an impossibly low budget ($5 per day)
+        # Alice has a physically impossible budget (1 cent per day)
         constraint = Constraint(
             trip_id=trip.id,
             user_id="broke_traveler",
-            budget_per_day=5.0,
+            budget_per_day=0.01,
             must_see=["Jerónimos Monastery"],
         )
         session.add(constraint)

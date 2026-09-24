@@ -39,6 +39,7 @@ app = FastAPI(
 cors_origins = settings.cors_origins_list
 if not cors_origins:
     import logging as _logging
+
     _logging.getLogger(__name__).error(
         "CORS_ORIGINS is empty — rejecting all cross-origin requests. "
         "Set CORS_ORIGINS in .env (e.g. http://localhost:5173)."

@@ -96,6 +96,8 @@ async function request<T>(
   method: string,
   path: string,
   body?: unknown,
+  signal?: AbortSignal,
+  retries = 2,
 ): Promise<T> {
   const headers: Record<string, string> = {
     'Content-Type': 'application/json',
@@ -112,59 +114,87 @@ async function request<T>(
   const init: RequestInit = {
     method,
     headers,
+    signal,
   };
   if (body !== undefined) {
     init.body = JSON.stringify(body);
   }
 
-  const res = await fetch(`${BASE}${path}`, init);
-
-  if (!res.ok) {
-    let message = `Request failed: ${res.status} ${res.statusText}`;
+  let lastError: unknown;
+  for (let attempt = 0; attempt <= retries; attempt++) {
     try {
-      const json = (await res.json()) as {
-        detail?:
-          | string
-          | { message?: string; code?: string }
-          | Array<{ msg?: string; message?: string }>;
-        message?: string;
-      };
-      if (typeof json.detail === 'string') {
-        message = json.detail;
-      } else if (Array.isArray(json.detail)) {
-        message = json.detail
-          .map((d) => d.msg || d.message || JSON.stringify(d))
-          .join(', ');
-      } else if (json.detail && typeof json.detail.message === 'string') {
-        message = json.detail.message;
-      } else if (typeof json.message === 'string') {
-        message = json.message;
+      const res = await fetch(`${BASE}${path}`, init);
+
+      if (!res.ok) {
+        // Don't retry 4xx client errors
+        if (res.status >= 400 && res.status < 500) {
+          let message = `Request failed: ${res.status} ${res.statusText}`;
+          try {
+            const json = (await res.json()) as {
+              detail?:
+                | string
+                | { message?: string; code?: string }
+                | Array<{ msg?: string; message?: string }>;
+              message?: string;
+            };
+            if (typeof json.detail === 'string') {
+              message = json.detail;
+            } else if (Array.isArray(json.detail)) {
+              message = json.detail
+                .map((d) => d.msg || d.message || JSON.stringify(d))
+                .join(', ');
+            } else if (json.detail && typeof json.detail.message === 'string') {
+              message = json.detail.message;
+            } else if (typeof json.message === 'string') {
+              message = json.message;
+            }
+          } catch {
+            // response body is not JSON, keep default message
+          }
+          throw new Error(message);
+        }
+
+        // 5xx: eligible for retry
+        const errMsg = `Request failed: ${res.status} ${res.statusText}`;
+        lastError = new Error(errMsg);
+        if (attempt < retries) {
+          await new Promise((resolve) => setTimeout(resolve, 2 ** attempt * 500));
+          continue;
+        }
+        throw lastError;
       }
-    } catch {
-      // response body is not JSON, keep default message
+
+      // 204 No Content and 205 Reset Content have empty bodies.
+      if (res.status === 204 || res.status === 205) {
+        return {} as T;
+      }
+
+      const contentType = res.headers?.get('content-type') ?? '';
+      if (!contentType.includes('application/json')) {
+        return {} as T;
+      }
+
+      return res.json() as Promise<T>;
+    } catch (err) {
+      // AbortError should never retry
+      if (err instanceof Error && err.name === 'AbortError') throw err;
+      lastError = err;
+      if (attempt < retries) {
+        await new Promise((resolve) => setTimeout(resolve, 2 ** attempt * 500));
+        continue;
+      }
+      throw err;
     }
-    throw new Error(message);
   }
-
-  // 204 No Content and 205 Reset Content have empty bodies — don't attempt JSON parse.
-  if (res.status === 204 || res.status === 205) {
-    return {} as T;
-  }
-
-  const contentType = res.headers?.get('content-type') ?? '';
-  if (!contentType.includes('application/json')) {
-    return {} as T;
-  }
-
-  return res.json() as Promise<T>;
+  throw lastError;
 }
 
 export const api = {
   get<T>(path: string): Promise<T> {
     return request<T>('GET', path);
   },
-  post<T>(path: string, body: unknown): Promise<T> {
-    return request<T>('POST', path, body);
+  post<T>(path: string, body: unknown, signal?: AbortSignal): Promise<T> {
+    return request<T>('POST', path, body, signal);
   },
   put<T>(path: string, body: unknown): Promise<T> {
     return request<T>('PUT', path, body);
@@ -226,8 +256,12 @@ export const api = {
       api.get<Plan>(
         `/api/v1/trips/${tripId}/plan${version ? `?version=${version}` : ''}`,
       ),
-    generate: (tripId: string) =>
-      api.post<Plan>(`/api/v1/trips/${tripId}/plan`, {}),
+    versions: (tripId: string) =>
+      api.get<Array<{ version: number; created_at: string; validation_status: string; notes_count: number }>>(
+        `/api/v1/trips/${tripId}/plan/versions`,
+      ),
+    generate: (tripId: string, signal?: AbortSignal) =>
+      api.post<Plan>(`/api/v1/trips/${tripId}/plan`, {}, signal),
     validate: (tripId: string) =>
       api.post<ValidationResult>(`/api/v1/trips/${tripId}/plan/validate`, {}),
     addItem: (tripId: string, data: unknown) =>

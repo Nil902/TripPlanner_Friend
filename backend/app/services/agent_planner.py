@@ -140,7 +140,10 @@ class AgentPlanner:
 
             # Validate proposed candidate
             budget_issues = check_budget(
-                proposed_days, constraints, budget_tolerance, num_members=len(constraints)
+                proposed_days,
+                constraints,
+                budget_tolerance,
+                num_members=len(constraints),
             )
             travel_issues = check_travel_time(proposed_days)
             hours_issues = check_open_hours(proposed_days)
@@ -191,14 +194,22 @@ class AgentPlanner:
             relaxed_days = enforce_schedule_uniqueness(relaxed_days, usable_places)
             relaxed_errors = [
                 i
-                for i in check_budget(relaxed_days, constraints, budget_tolerance, num_members=len(constraints))
+                for i in check_budget(
+                    relaxed_days,
+                    constraints,
+                    budget_tolerance,
+                    num_members=len(constraints),
+                )
                 + check_travel_time(relaxed_days)
                 + check_open_hours(relaxed_days)
                 if i.severity == "error"
             ]
             if len(relaxed_errors) < best_issues_count:
                 best_days = relaxed_days
-            status = ValidationStatus.PARTIAL
+            # Only mark PARTIAL if errors remain after relaxation; otherwise the plan is VALID
+            status = (
+                ValidationStatus.VALID if not relaxed_errors else ValidationStatus.PARTIAL
+            )
             notes.append(
                 f"Reached maximum iterations ({cls.MAX_ITERATIONS}). Applied Section 9.2 Constraint Relaxation: "
                 "Relaxed daily budget cap by 15% to preserve must-see attractions without dropping key venues."

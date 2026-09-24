@@ -227,7 +227,10 @@ export default function InteractiveMap({ stops, dayIndex }: InteractiveMapProps)
             viewBox="0 0 500 200"
             preserveAspectRatio="xMidYMid meet"
             style={{ position: 'absolute', inset: 0 }}
+            role="img"
+            aria-label={`Day ${dayIndex} route map showing ${stops.length} stop${stops.length === 1 ? '' : 's'}: ${stops.map((s) => s.name).join(', ')}`}
           >
+            <title>Day {dayIndex} route map — {stops.length} stop{stops.length === 1 ? '' : 's'}</title>
             <defs>
               <filter id="shadow" x="-20%" y="-20%" width="140%" height="140%">
                 <feDropShadow dx="0" dy="2" stdDeviation="2" floodOpacity="0.2" />
@@ -292,6 +295,11 @@ export default function InteractiveMap({ stops, dayIndex }: InteractiveMapProps)
                   style={{ cursor: 'pointer', transition: 'transform 0.15s ease' }}
                   onMouseEnter={() => setHoveredIndex(pt.index)}
                   onMouseLeave={() => setHoveredIndex(null)}
+                  onFocus={() => setHoveredIndex(pt.index)}
+                  onBlur={() => setHoveredIndex(null)}
+                  tabIndex={0}
+                  role="button"
+                  aria-label={`Stop ${pt.index + 1}: ${pt.stop.name}${pt.stop.cost > 0 ? `, $${pt.stop.cost}` : ', free'}`}
                 >
                   {/* Pin shadow */}
                   <ellipse cx="0" cy="8" rx="8" ry="3" fill="rgba(36,33,28,0.2)" />
@@ -348,6 +356,21 @@ export default function InteractiveMap({ stops, dayIndex }: InteractiveMapProps)
             })}
           </svg>
         )}
+        <span
+          style={{
+            position: 'absolute',
+            width: 1,
+            height: 1,
+            padding: 0,
+            margin: -1,
+            overflow: 'hidden',
+            clip: 'rect(0,0,0,0)',
+            whiteSpace: 'nowrap',
+            borderWidth: 0,
+          }}
+        >
+          Route map for Day {dayIndex}: {stops.map((s, i) => `Stop ${i + 1}: ${s.name}`).join('. ')}.
+        </span>
       </div>
 
       {/* Route leg stats summary */}

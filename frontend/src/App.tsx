@@ -55,8 +55,6 @@ export interface CurrentUser {
 }
 
 function formatTripTitle(id: string): string {
-  if (id.toLowerCase().includes('lisbon')) return 'Lisbon trip';
-  if (id.toLowerCase().includes('tokyo')) return 'Tokyo Autumn Expedition';
   const clean = id.replace(/^trip-/, '');
   const part = clean.split('-')[0];
   if (part) {
@@ -66,8 +64,6 @@ function formatTripTitle(id: string): string {
 }
 
 function formatDestination(id: string): string {
-  if (id.toLowerCase().includes('lisbon')) return 'Lisbon, Portugal';
-  if (id.toLowerCase().includes('tokyo')) return 'Tokyo, Japan';
   const clean = id.replace(/^trip-/, '');
   const part = clean.split('-')[0];
   if (part) {
@@ -533,33 +529,35 @@ export default function App() {
 
       case 'dashboard':
         return (
-          <TripsDashboardPage
-            user={
-              currentUser && currentUser.email
-                ? {
-                    id: currentUser.id,
-                    name: currentUser.name,
-                    email: currentUser.email ?? '',
-                  }
-                : { id: '', name: '', email: '' }
-            }
-            currentUser={currentUser}
-            onRequireLogin={() => setScreen('auth')}
-            trips={trips}
-            onSelectTrip={(trip) => {
-              setActiveTrip(trip);
-              setScreen('room');
-              setActive('overview');
-            }}
-            onCreateTrip={(newTrip) => {
-              setTrips((prev) => [newTrip, ...prev]);
-            }}
-            onLogout={handleLogout}
-            onManageTrip={(trip) => {
-              setActiveTrip(trip);
-              setScreen('owner');
-            }}
-          />
+          <ErrorBoundary label="Dashboard failed to load">
+            <TripsDashboardPage
+              user={
+                currentUser && currentUser.email
+                  ? {
+                      id: currentUser.id,
+                      name: currentUser.name,
+                      email: currentUser.email ?? '',
+                    }
+                  : { id: '', name: '', email: '' }
+              }
+              currentUser={currentUser}
+              onRequireLogin={() => setScreen('auth')}
+              trips={trips}
+              onSelectTrip={(trip) => {
+                setActiveTrip(trip);
+                setScreen('room');
+                setActive('overview');
+              }}
+              onCreateTrip={(newTrip) => {
+                setTrips((prev) => [newTrip, ...prev]);
+              }}
+              onLogout={handleLogout}
+              onManageTrip={(trip) => {
+                setActiveTrip(trip);
+                setScreen('owner');
+              }}
+            />
+          </ErrorBoundary>
         );
 
       case 'owner':
@@ -571,37 +569,39 @@ export default function App() {
           );
         }
         return (
-          <OwnerTripPage
-            trip={activeTrip}
-            members={members}
-            currentUser={currentUser}
-            onRequireLogin={() => setScreen('auth')}
-            onUpdateTrip={(updated) => {
-              setActiveTrip(updated);
-              setTrips((prev) => prev.map((t) => (t.id === updated.id ? updated : t)));
-            }}
-            onUpdateMembers={(updatedMembers) => {
-              setMembers(updatedMembers);
-            }}
-            onDeleteTrip={(tripId) => {
-              const remaining = trips.filter((t) => t.id !== tripId);
-              setTrips(remaining);
-              if (remaining.length > 0) {
-                setActiveTrip(remaining[0]);
+          <ErrorBoundary label="Settings failed to load">
+            <OwnerTripPage
+              trip={activeTrip}
+              members={members}
+              currentUser={currentUser}
+              onRequireLogin={() => setScreen('auth')}
+              onUpdateTrip={(updated) => {
+                setActiveTrip(updated);
+                setTrips((prev) => prev.map((t) => (t.id === updated.id ? updated : t)));
+              }}
+              onUpdateMembers={(updatedMembers) => {
+                setMembers(updatedMembers);
+              }}
+              onDeleteTrip={(tripId) => {
+                const remaining = trips.filter((t) => t.id !== tripId);
+                setTrips(remaining);
+                if (remaining.length > 0) {
+                  setActiveTrip(remaining[0]);
+                }
+                if (currentUser?.role === 'creator') {
+                  setScreen('dashboard');
+                } else {
+                  setScreen('welcome');
+                }
+              }}
+              onBackToRoom={() => setScreen('room')}
+              onBackToDashboard={
+                currentUser?.role === 'creator'
+                  ? () => setScreen('dashboard')
+                  : undefined
               }
-              if (currentUser?.role === 'creator') {
-                setScreen('dashboard');
-              } else {
-                setScreen('welcome');
-              }
-            }}
-            onBackToRoom={() => setScreen('room')}
-            onBackToDashboard={
-              currentUser?.role === 'creator'
-                ? () => setScreen('dashboard')
-                : undefined
-            }
-          />
+            />
+          </ErrorBoundary>
         );
 
       case 'admin_login':
@@ -807,39 +807,45 @@ export default function App() {
               }}
             >
               <div style={{ width: '100%', maxWidth: 780, margin: '0 auto' }}>
-                <ErrorBoundary label="This view could not be loaded">
                 {active === 'overview' && (
-                  <OverviewPage
-                    trip={activeTrip}
-                    members={members}
-                    setActive={(id) => setActive(id as ActiveTab)}
-                    planMode={planMode}
-                    setPlanMode={setPlanMode}
-                    isCreator={currentUser?.role === 'creator'}
-                    onOpenAdmin={
-                      currentUser?.role === 'creator'
-                        ? () => setScreen('owner')
-                        : undefined
-                    }
-                  />
+                  <ErrorBoundary label="Overview failed to load">
+                    <OverviewPage
+                      trip={activeTrip}
+                      members={members}
+                      setActive={(id) => setActive(id as ActiveTab)}
+                      planMode={planMode}
+                      setPlanMode={setPlanMode}
+                      isCreator={currentUser?.role === 'creator'}
+                      onOpenAdmin={
+                        currentUser?.role === 'creator'
+                          ? () => setScreen('owner')
+                          : undefined
+                      }
+                    />
+                  </ErrorBoundary>
                 )}
                 {active === 'plans' && (
-                  <PlansPage
-                    tripId={activeTrip.id}
-                    members={members}
-                    currentMemberId={currentUser?.id || members[0]?.id || ''}
-                  />
+                  <ErrorBoundary label="Plans failed to load">
+                    <PlansPage
+                      tripId={activeTrip.id}
+                      members={members}
+                      currentMemberId={currentUser?.id || members[0]?.id || ''}
+                    />
+                  </ErrorBoundary>
                 )}
                 {active === 'itinerary' && (
-                  <ItineraryPage
-                    tripId={activeTrip.id}
-                    planMode={planMode}
-                  />
+                  <ErrorBoundary label="Itinerary failed to load">
+                    <ItineraryPage
+                      tripId={activeTrip.id}
+                      planMode={planMode}
+                    />
+                  </ErrorBoundary>
                 )}
                 {active === 'costs' && (
-                  <CostsPage tripId={activeTrip.id} members={members} />
+                  <ErrorBoundary label="Costs failed to load">
+                    <CostsPage tripId={activeTrip.id} members={members} />
+                  </ErrorBoundary>
                 )}
-                </ErrorBoundary>
               </div>
             </main>
 

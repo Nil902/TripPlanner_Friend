@@ -13,9 +13,20 @@ import {
 import Sidebar from '../components/Sidebar';
 import TripsDashboardPage from '../pages/TripsDashboardPage';
 import OwnerTripPage from '../pages/OwnerTripPage';
-import { DEFAULT_TRIP } from '../lib/constants';
+import type { TripSummary } from '../lib/constants';
 import * as apiModule from '../lib/api';
 import type { Trip } from '@shared/types';
+
+const DEFAULT_TRIP: TripSummary = {
+  id: 'trip-lisbon-202',
+  title: 'Lisbon trip',
+  destination: 'Lisbon, Portugal',
+  start_date: '2026-06-12',
+  end_date: '2026-06-14',
+  creator_id: 'alice',
+  status: 'collecting_constraints',
+  member_ids: ['alice', 'bob', 'cara'],
+};
 
 describe('Frontend RBAC & Route Middleware Guards', () => {
   beforeEach(() => {

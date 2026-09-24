@@ -2,6 +2,8 @@
 Authentication API endpoints: Signup, Login, and Profile inspection.
 """
 
+import re
+
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlmodel import Session, select
 
@@ -20,6 +22,8 @@ from app.models.schema import (
     UserResponse,
 )
 
+_EMAIL_RE = re.compile(r"^[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}$")
+
 router = APIRouter(prefix="/api/v1/auth", tags=["Authentication"])
 
 
@@ -32,9 +36,17 @@ def signup(
 ):
     """Register a new user account with email and password."""
     # Validate minimum password length before doing any DB work
+    if not _EMAIL_RE.match(req.email.strip()):
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail={
+                "code": "INVALID_EMAIL",
+                "message": "Please provide a valid email address.",
+            },
+        )
     if len(req.password) < 8:
         raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail={
                 "code": "WEAK_PASSWORD",
                 "message": "Password must be at least 8 characters long.",

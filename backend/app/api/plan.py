@@ -1,3 +1,5 @@
+import asyncio
+import logging
 import math
 import uuid
 from datetime import datetime
@@ -37,6 +39,8 @@ from app.validators.budget_validator import check_budget
 from app.validators.open_hours_validator import check_open_hours
 from app.validators.travel_validator import check_travel_time
 
+logger = logging.getLogger(__name__)
+
 router = APIRouter(prefix="/api/v1/trips/{trip_id}/plan", tags=["Plan"])
 
 
@@ -49,12 +53,22 @@ def assemble_plan_response(session: Session, trip: Trip, plan: Plan) -> PlanResp
         .order_by(col(PlanItem.start_time).asc())
     ).all()
 
+    # Batch-load all places in one query instead of N individual lookups
+    place_ids = list({it.place_id for it in plan_items})
+    if place_ids:
+        places_list = session.exec(
+            select(Place).where(col(Place.place_id).in_(place_ids))
+        ).all()
+        place_map: dict[str, Place] = {p.place_id: p for p in places_list}
+    else:
+        place_map = {}
+
     days_data: list[PlanDayResponse] = []
     for d_idx, d_date in enumerate(day_dates):
         items_for_day = [it for it in plan_items if it.day_index == d_idx]
         item_responses: list[PlanItemResponse] = []
         for it in items_for_day:
-            place = session.get(Place, it.place_id)
+            place = place_map.get(it.place_id)
             item_responses.append(
                 PlanItemResponse(
                     id=it.id,
@@ -78,10 +92,10 @@ def assemble_plan_response(session: Session, trip: Trip, plan: Plan) -> PlanResp
 
 
 @router.post("", response_model=PlanResponse)
-def generate_plan(
+async def generate_plan(
     trip_id: str,
     session: Session = Depends(get_session),
-):
+) -> PlanResponse:
     """Trigger the autonomous agent propose-validate-rebalance planning loop."""
     trip = session.get(Trip, trip_id)
     if not trip:
@@ -97,7 +111,21 @@ def generate_plan(
         select(Constraint).where(Constraint.trip_id == trip_id)
     ).all()
 
-    plan_response = AgentPlanner.generate_plan(session, trip, list(constraints))
+    try:
+        loop = asyncio.get_event_loop()
+        plan_response = await loop.run_in_executor(
+            None,
+            lambda: AgentPlanner.generate_plan(session, trip, list(constraints)),
+        )
+    except Exception as exc:
+        logger.exception("Agent planning loop failed for trip %s", trip_id)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail={
+                "code": "PLANNING_FAILED",
+                "message": "The planning agent encountered an unexpected error. Please try again.",
+            },
+        ) from exc
 
     # Update trip status
     trip.status = TripStatus.PLANNED
@@ -141,6 +169,37 @@ def get_plan(
         )
 
     return assemble_plan_response(session, trip, plan)
+
+
+@router.get("/versions", response_model=list[dict])
+def list_plan_versions(
+    trip_id: str,
+    session: Session = Depends(get_session),
+) -> list[dict]:
+    """List all available plan versions for this trip."""
+    trip = session.get(Trip, trip_id)
+    if not trip:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={
+                "code": "TRIP_NOT_FOUND",
+                "message": f"Trip '{trip_id}' not found.",
+            },
+        )
+
+    plans = session.exec(
+        select(Plan).where(Plan.trip_id == trip_id).order_by(col(Plan.version).desc())
+    ).all()
+
+    return [
+        {
+            "version": p.version,
+            "created_at": p.created_at.isoformat(),
+            "validation_status": p.validation_status.value,
+            "notes_count": len(p.notes or []),
+        }
+        for p in plans
+    ]
 
 
 @router.post("/items", response_model=PlanItemResponse)
@@ -494,13 +553,23 @@ def refine_plan(
             },
         )
 
-    return AgentPlanner.refine_plan(
-        session=session,
-        trip=trip,
-        current_plan=plan,
-        instruction=instruction,
-        user_id=req.user_id,
-    )
+    try:
+        return AgentPlanner.refine_plan(
+            session=session,
+            trip=trip,
+            current_plan=plan,
+            instruction=instruction,
+            user_id=req.user_id,
+        )
+    except Exception as exc:
+        logger.exception("Plan refinement failed for trip %s", trip_id)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail={
+                "code": "REFINEMENT_FAILED",
+                "message": "The planning agent encountered an error during refinement. Please try again.",
+            },
+        ) from exc
 
 
 @router.post("/ask", response_model=AskAgentResponse)

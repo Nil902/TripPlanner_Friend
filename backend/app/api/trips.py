@@ -206,16 +206,25 @@ def get_trip_members(
     members: list[MemberResponse] = []
     seen: set[str] = set()
 
+    member_ids_list: list[str] = []
     for mid in trip.member_ids or []:
-        if mid in seen:
-            continue
-        seen.add(mid)
+        if mid not in seen:
+            seen.add(mid)
+            member_ids_list.append(mid)
 
+    # Batch-load all user records in a single query
+    user_map: dict[str, User] = {}
+    if member_ids_list:
+        db_users = session.exec(
+            select(User).where(col(User.id).in_(member_ids_list))
+        ).all()
+        user_map = {u.id: u for u in db_users}
+
+    for mid in member_ids_list:
         role = "creator" if mid == trip.creator_id else "joiner"
         submitted = mid in submitted_user_ids
 
-        # Look up User table for name, or format name from ID
-        user = session.get(User, mid)
+        user = user_map.get(mid)
         if user and user.name:
             name = user.name
         else:

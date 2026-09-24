@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback } from 'react';
+import type { SettleUpReport } from '@shared/types';
 import { Plus, ArrowRight, CheckCircle2, Wallet } from 'lucide-react';
 import {
   BORDER,
@@ -23,6 +24,7 @@ export default function CostsPage({
   members,
 }: CostsPageProps) {
   const [expenses, setExpenses] = useState<ExpenseItem[]>([]);
+  const [settleUpReport, setSettleUpReport] = useState<SettleUpReport | null>(null);
   const [isAddOpen, setIsAddOpen] = useState(false);
 
   const loadExpenses = useCallback(() => {
@@ -47,57 +49,34 @@ export default function CostsPage({
       });
   }, [tripId]);
 
+  const loadSettleUp = useCallback(() => {
+    if (!tripId) return;
+    api.expenses
+      .settleUp(tripId)
+      .then((report) => setSettleUpReport(report))
+      .catch(() => setSettleUpReport(null));
+  }, [tripId]);
+
   useEffect(() => {
     loadExpenses();
-  }, [loadExpenses]);
+    loadSettleUp();
+  }, [loadExpenses, loadSettleUp]);
 
-  // Settle-up greedy math (Section 10.3)
   const total = expenses.reduce((s, e) => s + e.amount, 0);
   const perPerson = members.length > 0 ? total / members.length : 0;
 
-  const balances = members.map((m) => {
-    const paid = expenses
-      .filter((e) => e.paidBy === m.id)
-      .reduce((s, e) => s + e.amount, 0);
-    return {
-      name: m.name,
-      id: m.id,
-      paid,
-      net: Math.round((paid - perPerson) * 100) / 100,
-    };
-  });
+  const balances = (settleUpReport?.user_balances ?? []).map((b) => ({
+    name: members.find((m) => m.id === b.user_id)?.name || b.user_id,
+    id: b.user_id,
+    paid: b.total_paid,
+    net: b.net_balance,
+  }));
 
-  // Calculate minimal greedy debt transactions
-  const debtors = balances
-    .filter((b) => b.net < -0.01)
-    .map((b) => ({ name: b.name, owes: -b.net }));
-  const creditors = balances
-    .filter((b) => b.net > 0.01)
-    .map((b) => ({ name: b.name, isOwed: b.net }));
-
-  const transfers: { from: string; to: string; amount: number }[] = [];
-  let dIdx = 0;
-  let cIdx = 0;
-
-  while (dIdx < debtors.length && cIdx < creditors.length) {
-    const debtor = debtors[dIdx];
-    const creditor = creditors[cIdx];
-    const amount = Math.min(debtor.owes, creditor.isOwed);
-
-    if (amount > 0.01) {
-      transfers.push({
-        from: debtor.name,
-        to: creditor.name,
-        amount: Math.round(amount * 100) / 100,
-      });
-    }
-
-    debtor.owes -= amount;
-    creditor.isOwed -= amount;
-
-    if (debtor.owes < 0.01) dIdx++;
-    if (creditor.isOwed < 0.01) cIdx++;
-  }
+  const transfers = (settleUpReport?.transfers ?? []).map((t) => ({
+    from: members.find((m) => m.id === t.debtor_id)?.name || t.debtor_id,
+    to: members.find((m) => m.id === t.creditor_id)?.name || t.creditor_id,
+    amount: t.amount,
+  }));
 
   const getMemberName = (id: string): string => {
     const member = members.find((m) => m.id === id);

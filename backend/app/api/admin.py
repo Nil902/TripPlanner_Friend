@@ -255,8 +255,10 @@ def delete_trip_admin(
     trip_id: str,
     session: Session = Depends(get_session),
     admin: User = Depends(get_current_admin_user),
-):
-    """Administrative force deletion of a trip."""
+) -> dict[str, str]:
+    """Administrative force deletion of a trip with full cascade."""
+    from app.models.schema import Constraint, Expense, PlanItem
+
     trip = session.get(Trip, trip_id)
     if not trip:
         raise HTTPException(
@@ -266,6 +268,29 @@ def delete_trip_admin(
                 "message": f"Trip '{trip_id}' not found.",
             },
         )
+
+    # Manually cascade: PlanItems -> Plans -> Constraints -> Expenses -> Trip
+    trip_plans = session.exec(select(Plan).where(Plan.trip_id == trip_id)).all()
+    for plan in trip_plans:
+        plan_items = session.exec(
+            select(PlanItem).where(PlanItem.plan_id == plan.id)
+        ).all()
+        for item in plan_items:
+            session.delete(item)
+        session.delete(plan)
+
+    constraints_to_delete = session.exec(
+        select(Constraint).where(Constraint.trip_id == trip_id)
+    ).all()
+    for c in constraints_to_delete:
+        session.delete(c)
+
+    expenses_to_delete = session.exec(
+        select(Expense).where(Expense.trip_id == trip_id)
+    ).all()
+    for e in expenses_to_delete:
+        session.delete(e)
+
     session.delete(trip)
     session.commit()
     return {"status": "deleted", "trip_id": trip_id}
@@ -344,31 +369,103 @@ def get_api_usage(
 def get_system_health(
     session: Session = Depends(get_session),
     admin: User = Depends(get_current_admin_user),
-):
-    """Live system diagnostics for backend services."""
-    return [
-        SystemHealthNode(
-            name="Postgres / SQLite Database",
-            status="up",
-            detail="11ms query latency · Connection pool healthy",
-            latency_ms=11.2,
-        ),
-        SystemHealthNode(
-            name="Redis Cache",
-            status="up",
-            detail="Cache hit rate 78% · 42MB used",
-            latency_ms=1.4,
-        ),
+) -> list[SystemHealthNode]:
+    """Live system diagnostics — probes DB and Redis; Nginx/LLM are inferred."""
+    import os
+    import time
+
+    results: list[SystemHealthNode] = []
+
+    # 1. Database probe — run a trivial query and time it
+    try:
+        t0 = time.perf_counter()
+        session.exec(select(User).limit(1)).first()
+        db_latency_ms = round((time.perf_counter() - t0) * 1000, 1)
+        results.append(
+            SystemHealthNode(
+                name="Postgres / SQLite Database",
+                status="up",
+                detail=f"{db_latency_ms}ms query latency · Connection pool healthy",
+                latency_ms=db_latency_ms,
+            )
+        )
+    except Exception as exc:
+        results.append(
+            SystemHealthNode(
+                name="Postgres / SQLite Database",
+                status="down",
+                detail=f"Database unreachable: {exc}",
+                latency_ms=None,
+            )
+        )
+
+    # 2. Redis probe — attempt PING via redis-py if REDIS_URL is configured
+    redis_url = os.environ.get("REDIS_URL", "")
+    if redis_url:
+        try:
+            import redis as redis_lib
+
+            t0 = time.perf_counter()
+            r = redis_lib.from_url(redis_url, socket_connect_timeout=2)
+            r.ping()
+            redis_latency_ms = round((time.perf_counter() - t0) * 1000, 1)
+            results.append(
+                SystemHealthNode(
+                    name="Redis Cache",
+                    status="up",
+                    detail=f"{redis_latency_ms}ms PING latency",
+                    latency_ms=redis_latency_ms,
+                )
+            )
+        except Exception as exc:
+            results.append(
+                SystemHealthNode(
+                    name="Redis Cache",
+                    status="down",
+                    detail=f"Redis unreachable: {exc}",
+                    latency_ms=None,
+                )
+            )
+    else:
+        results.append(
+            SystemHealthNode(
+                name="Redis Cache",
+                status="degraded",
+                detail="REDIS_URL not configured — cache layer disabled",
+                latency_ms=None,
+            )
+        )
+
+    # 3. Nginx/Gateway — inferred (no direct probe available from backend)
+    results.append(
         SystemHealthNode(
             name="Nginx Gateway",
             status="up",
-            detail="Rate limit active (100 req/min) · 0 blocked today",
-            latency_ms=0.8,
-        ),
-        SystemHealthNode(
-            name="Gemini LLM Service",
-            status="up",
-            detail="Model gemini-3.6-flash operational · ~1.8s avg",
-            latency_ms=1800.0,
-        ),
-    ]
+            detail="Inferred healthy (request reached backend)",
+            latency_ms=None,
+        )
+    )
+
+    # 4. Gemini LLM — inferred from settings
+    from app.core.config import settings as cfg
+
+    if cfg.GEMINI_API_KEY:
+        results.append(
+            SystemHealthNode(
+                name="Gemini LLM Service",
+                status="up",
+                detail=f"API key configured · model {cfg.LLM_MODEL_NAME}",
+                latency_ms=None,
+            )
+        )
+    else:
+        results.append(
+            SystemHealthNode(
+                name="Gemini LLM Service",
+                status="degraded",
+                detail="GEMINI_API_KEY not set — heuristic fallback active",
+                latency_ms=None,
+            )
+        )
+
+    return results

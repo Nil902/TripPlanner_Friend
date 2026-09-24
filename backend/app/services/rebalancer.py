@@ -8,6 +8,7 @@ from datetime import timedelta
 from sqlmodel import Session, select
 
 from app.models.schema import (
+    Constraint,
     DisruptionEvent,
     DisruptionType,
     Place,
@@ -22,6 +23,9 @@ from app.models.schema import (
     utc_now,
 )
 from app.services.places_service import find_alternative_place
+from app.validators.budget_validator import check_budget
+from app.validators.open_hours_validator import check_open_hours
+from app.validators.travel_validator import check_travel_time
 
 from .proposer import build_day_dates, create_plan_response
 
@@ -171,4 +175,22 @@ def rebalance(
         )
 
     session.commit()
+
+    # Re-validate the rebalanced plan and update its status accordingly
+    constraints = list(
+        session.exec(select(Constraint).where(Constraint.trip_id == trip.id)).all()
+    )
+    budget_issues = check_budget(
+        persisted_days, constraints, num_members=len(constraints)
+    )
+    travel_issues = check_travel_time(persisted_days)
+    hours_issues = check_open_hours(persisted_days)
+    all_issues = budget_issues + travel_issues + hours_issues
+    has_errors = any(i.severity == "error" for i in all_issues)
+    new_plan.validation_status = (
+        ValidationStatus.INVALID if has_errors else ValidationStatus.VALID
+    )
+    session.add(new_plan)
+    session.commit()
+
     return create_plan_response(new_plan, persisted_days)

@@ -17,6 +17,19 @@ from app.models.schema import Trip, TripStatus, User
 @pytest.fixture(autouse=True)
 def setup_database():
     init_db()
+    with Session(engine) as session:
+        admin_user = session.exec(
+            select(User).where(User.email == "admin@antigravity.travel")
+        ).first()
+        if not admin_user:
+            admin_user = User(
+                email="admin@antigravity.travel",
+                name="Platform Administrator",
+                hashed_password=hash_password("admin12345"),
+                is_admin=True,
+            )
+            session.add(admin_user)
+            session.commit()
 
 
 @pytest.mark.asyncio

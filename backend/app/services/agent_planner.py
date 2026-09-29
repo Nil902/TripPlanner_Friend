@@ -208,7 +208,9 @@ class AgentPlanner:
                 best_days = relaxed_days
             # Only mark PARTIAL if errors remain after relaxation; otherwise the plan is VALID
             status = (
-                ValidationStatus.VALID if not relaxed_errors else ValidationStatus.PARTIAL
+                ValidationStatus.VALID
+                if not relaxed_errors
+                else ValidationStatus.PARTIAL
             )
             notes.append(
                 f"Reached maximum iterations ({cls.MAX_ITERATIONS}). Applied Section 9.2 Constraint Relaxation: "
@@ -352,11 +354,15 @@ class AgentPlanner:
                     for k_idx, it in enumerate(kept_items):
                         p_obj = session.get(Place, it.place_id)
                         p_resp = PlaceResponse.model_validate(p_obj) if p_obj else None
+                        # Clamp hours to a valid range [8, 22] to prevent ValueError
+                        # when kept_items has 3+ entries (10 + k_idx*4 can exceed 23).
+                        start_hour = min(10 + (k_idx * 4), 22)
+                        end_hour = min(12 + (k_idx * 4), 23)
                         st = datetime.combine(d_date, datetime.min.time()).replace(
-                            hour=10 + (k_idx * 4), minute=0
+                            hour=start_hour, minute=0
                         )
                         et = datetime.combine(d_date, datetime.min.time()).replace(
-                            hour=12 + (k_idx * 4), minute=30
+                            hour=end_hour, minute=30
                         )
                         new_day_items.append(
                             PlanItemResponse(
@@ -624,8 +630,21 @@ class AgentPlanner:
         travel_issues = check_travel_time(refined_days)
         hours_issues = check_open_hours(refined_days)
         all_issues = budget_issues + travel_issues + hours_issues
-        has_errors = any(i.severity == "error" for i in all_issues)
-        v_status = ValidationStatus.INVALID if has_errors else ValidationStatus.VALID
+        has_hard_errors = any(
+            i.severity == "error" and i.type in ("travel_time", "open_hours")
+            for i in all_issues
+        )
+        has_budget_errors = any(
+            i.severity == "error" and i.type == "budget" for i in all_issues
+        )
+        # Budget-only violations are PARTIAL (same as the main planner's relaxation
+        # path). Hard scheduling conflicts (travel time, open hours) are INVALID.
+        if has_hard_errors:
+            v_status = ValidationStatus.INVALID
+        elif has_budget_errors:
+            v_status = ValidationStatus.PARTIAL
+        else:
+            v_status = ValidationStatus.VALID
 
         new_plan = Plan(
             id=str(uuid.uuid4()),

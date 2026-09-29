@@ -91,7 +91,25 @@ def check_travel_time(
                     )
                 )
 
-            if time_gap_minutes < est_minutes and time_gap_minutes >= 0:
+            if time_gap_minutes < 0:
+                # Items overlap in time — this is a scheduling conflict, not just a
+                # transit issue. Emit a separate, clearer error.
+                issues.append(
+                    ValidationIssue(
+                        type="travel_time",
+                        severity="error",
+                        day_index=day.day_index,
+                        place_id=curr_item.place_id,
+                        message=(
+                            f"Day {day.day_index + 1}: Scheduling conflict — '{prev_place.name}' "
+                            f"ends at {prev_item.end_time.strftime('%H:%M')} but "
+                            f"'{curr_place.name}' starts at {curr_item.start_time.strftime('%H:%M')} "
+                            f"({abs(time_gap_minutes)} min overlap)."
+                        ),
+                        suggested_action="Adjust start/end times so items do not overlap.",
+                    )
+                )
+            elif time_gap_minutes < est_minutes:
                 issues.append(
                     ValidationIssue(
                         type="travel_time",

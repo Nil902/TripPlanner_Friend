@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { MapPin, ArrowRight, Lock, Mail, User, AlertCircle } from 'lucide-react';
+import { MapPin, ArrowRight, Lock, Mail, User, AlertCircle, Eye, EyeOff } from 'lucide-react';
 import {
   PAPER,
   INK,
@@ -28,6 +28,7 @@ export default function AuthPage({
   const [isSignUp, setIsSignUp] = useState(initialMode === 'signup');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
+  const [showPassword, setShowPassword] = useState(false);
   const [name, setName] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -156,6 +157,7 @@ export default function AuthPage({
             onClick={() => {
               setIsSignUp(false);
               setError(null);
+              setShowPassword(false);
             }}
             style={{
               flex: 1,
@@ -176,6 +178,7 @@ export default function AuthPage({
             onClick={() => {
               setIsSignUp(true);
               setError(null);
+              setShowPassword(false);
             }}
             style={{
               flex: 1,
@@ -284,6 +287,7 @@ export default function AuthPage({
                 placeholder="you@example.com"
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
+                autoComplete="username"
                 style={{
                   width: '100%',
                   padding: '10px 12px 10px 38px',
@@ -319,14 +323,15 @@ export default function AuthPage({
               />
               <input
                 id="auth-password"
-                type="password"
+                type={showPassword ? 'text' : 'password'}
                 required
                 placeholder="••••••••"
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
+                autoComplete={isSignUp ? 'new-password' : 'current-password'}
                 style={{
                   width: '100%',
-                  padding: '10px 12px 10px 38px',
+                  padding: '10px 40px 10px 38px',
                   borderRadius: 8,
                   border: `1px solid ${BORDER}`,
                   fontSize: 14,
@@ -335,6 +340,28 @@ export default function AuthPage({
                   outline: 'none',
                 }}
               />
+              <button
+                type="button"
+                onClick={() => setShowPassword((prev) => !prev)}
+                aria-label={showPassword ? 'Hide characters' : 'Show characters'}
+                title={showPassword ? 'Hide password' : 'Show password'}
+                style={{
+                  position: 'absolute',
+                  right: 10,
+                  top: '50%',
+                  transform: 'translateY(-50%)',
+                  background: 'none',
+                  border: 'none',
+                  cursor: 'pointer',
+                  padding: 4,
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  color: MUTED,
+                }}
+              >
+                {showPassword ? <EyeOff size={16} /> : <Eye size={16} />}
+              </button>
             </div>
           </div>
 

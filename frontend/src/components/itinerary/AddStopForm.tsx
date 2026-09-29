@@ -56,6 +56,7 @@ export default function AddStopForm({
     if (d.includes('paris') || d.includes('france')) return { lat: 48.8566, lng: 2.3522 };
     if (d.includes('new york') || d.includes('nyc')) return { lat: 40.7128, lng: -74.006 };
     if (d.includes('london')) return { lat: 51.5074, lng: -0.1278 };
+    if (d.includes('siem reap') || d.includes('angkor')) return { lat: 13.4125, lng: 103.8670 };
     return { lat: 38.7223, lng: -9.1393 };
   }
 

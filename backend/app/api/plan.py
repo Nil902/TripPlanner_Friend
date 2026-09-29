@@ -652,18 +652,64 @@ def _fallback_ask_answer(
         seen_names.add(key)
         lines.append(f"- {name} — {detail}")
 
-    if any(
-        w in q
-        for w in (
-            "popular",
-            "best",
-            "top",
-            "must",
-            "famous",
-            "recommend",
-            "see",
-            "visit",
-        )
+    # Detect if user is asking specifically about a sub-type (temple, museum, etc.)
+    TEMPLE_WORDS = ("temple", "shrine", "pagoda", "wat", "angkor", "ruin")
+    MUSEUM_WORDS = ("museum", "gallery", "exhibition")
+    FOOD_WORDS = (
+        "eat",
+        "food",
+        "restaurant",
+        "cafe",
+        "dining",
+        "lunch",
+        "dinner",
+        "breakfast",
+    )
+    CHEAP_WORDS = ("cheap", "budget", "affordable", "free")
+    POPULAR_WORDS = (
+        "popular",
+        "best",
+        "top",
+        "must",
+        "famous",
+        "recommend",
+        "see",
+        "visit",
+    )
+
+    if any(w in q for w in TEMPLE_WORDS):
+        temples = [
+            p
+            for p in places
+            if p.category in ("historic", "landmark", "culture")
+            and any(w in p.name.lower() for w in TEMPLE_WORDS)
+        ]
+        if not temples:
+            temples = [p for p in places if p.category in ("historic", "landmark")]
+        lines.append("Temples & historic sites:")
+        for p in temples:
+            cost_str = (
+                "$0 (free / included with pass)"
+                if p.est_cost == 0
+                else f"${p.est_cost:.0f}"
+            )
+            open_time = "0730"
+            if p.opening_hours:
+                periods = p.opening_hours.get("periods", [])
+                if periods:
+                    open_time = periods[0].get("open", {}).get("time", "0730")
+            add_bullet(p.name, f"{cost_str}, opens {open_time}")
+
+    if any(w in q for w in MUSEUM_WORDS):
+        museums = [p for p in places if p.category == "museum"]
+        if museums:
+            lines.append("\nMuseums & galleries:")
+            for p in museums:
+                cost_str = "Free" if p.est_cost == 0 else f"${p.est_cost:.0f}"
+                add_bullet(p.name, f"{cost_str}")
+
+    if any(w in q for w in POPULAR_WORDS) and not any(
+        w in q for w in TEMPLE_WORDS + MUSEUM_WORDS
     ):
         attractions = [p for p in places if p.category not in FOOD_CATEGORIES]
         dining = [p for p in places if p.category in FOOD_CATEGORIES]
@@ -674,14 +720,24 @@ def _fallback_ask_answer(
             lines.append("")
             lines.append("Best places to eat:")
             for p in dining[:3]:
-                lines.append(f"- {p.name} — ${p.est_cost:.0f}")
+                cost_str = "Free" if p.est_cost == 0 else f"${p.est_cost:.0f}"
+                lines.append(f"- {p.name} — {cost_str}")
 
-    cheap = [p for p in places if p.est_cost <= 30]
-    if any(w in q for w in ("cheap", "budget", "affordable", "free")) and cheap:
+    if any(w in q for w in FOOD_WORDS) and not any(w in q for w in POPULAR_WORDS):
+        dining = [p for p in places if p.category in FOOD_CATEGORIES]
+        if dining:
+            lines.append("Best places to eat:")
+            for p in dining[:4]:
+                cost_str = "Free" if p.est_cost == 0 else f"${p.est_cost:.0f}"
+                add_bullet(p.name, f"{cost_str}")
+
+    cheap = [p for p in places if p.est_cost <= 15]
+    if any(w in q for w in CHEAP_WORDS) and cheap:
         lines.append("")
         lines.append("Budget-friendly picks:")
-        for p in sorted(cheap, key=lambda x: x.est_cost)[:3]:
-            add_bullet(p.name, "free" if p.est_cost == 0 else f"${p.est_cost:.0f}")
+        for p in sorted(cheap, key=lambda x: x.est_cost)[:5]:
+            label = "free" if p.est_cost == 0 else f"${p.est_cost:.0f}"
+            add_bullet(p.name, label)
 
     if len(lines) <= 2:
         lines.append(f"Top venue to visit: {places[0].name} ({places[0].category}).")

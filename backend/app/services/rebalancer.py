@@ -53,43 +53,37 @@ def rebalance(
         f"Details: {disruption.description or 'Schedule disruption'}."
     )
 
-    new_plan = Plan(
-        id=str(uuid.uuid4()),
-        trip_id=trip.id,
-        version=current_plan.version + 1,
-        validation_status=ValidationStatus.VALID,
-        notes=notes,
-        created_at=utc_now(),
-    )
-    session.add(new_plan)
-    session.commit()
-    session.refresh(new_plan)
-
-    persisted_days: list[PlanDayResponse] = []
+    # ── Phase 1: Build rebalanced items IN MEMORY ─────────────────────────────
+    # Determine the final validation_status before the first DB commit to avoid
+    # leaving a phantom VALID plan row if an error occurs mid-rebalance (Bug #1 fix).
+    staged_days: list[tuple[PlanDayResponse, list[dict]]] = []
 
     for d_idx, d_date in enumerate(day_dates):
         items_for_day = [it for it in existing_items if it.day_index == d_idx]
         items_for_day.sort(key=lambda x: x.start_time)
         day_responses: list[PlanItemResponse] = []
+        # Each staged item is a dict of PlanItem field kwargs; plan_id is set in Phase 3.
+        staged_item_kwargs: list[dict] = []
 
         if d_idx != disruption.day_index:
             # UNAFFECTED DAY: Copy verbatim
             for it in items_for_day:
                 place = session.get(Place, it.place_id)
                 place_resp = PlaceResponse.model_validate(place) if place else None
-                new_item = PlanItem(
-                    id=str(uuid.uuid4()),
-                    plan_id=new_plan.id,
-                    place_id=it.place_id,
-                    day_index=d_idx,
-                    start_time=it.start_time,
-                    end_time=it.end_time,
-                    cost=it.cost,
+                item_id = str(uuid.uuid4())
+                staged_item_kwargs.append(
+                    {
+                        "id": item_id,
+                        "place_id": it.place_id,
+                        "day_index": d_idx,
+                        "start_time": it.start_time,
+                        "end_time": it.end_time,
+                        "cost": it.cost,
+                    }
                 )
-                session.add(new_item)
                 day_responses.append(
                     PlanItemResponse(
-                        id=new_item.id,
+                        id=item_id,
                         place_id=it.place_id,
                         place=place_resp,
                         day_index=d_idx,
@@ -144,39 +138,45 @@ def rebalance(
                 place_resp = (
                     PlaceResponse.model_validate(target_place) if target_place else None
                 )
-                new_item = PlanItem(
-                    id=str(uuid.uuid4()),
-                    plan_id=new_plan.id,
-                    place_id=target_place.place_id if target_place else it.place_id,
-                    day_index=d_idx,
-                    start_time=start_t,
-                    end_time=end_t,
-                    cost=target_place.est_cost if target_place else it.cost,
+                item_id = str(uuid.uuid4())
+                item_cost = target_place.est_cost if target_place else it.cost
+                item_place_id = target_place.place_id if target_place else it.place_id
+                staged_item_kwargs.append(
+                    {
+                        "id": item_id,
+                        "place_id": item_place_id,
+                        "day_index": d_idx,
+                        "start_time": start_t,
+                        "end_time": end_t,
+                        "cost": item_cost,
+                    }
                 )
-                session.add(new_item)
                 day_responses.append(
                     PlanItemResponse(
-                        id=new_item.id,
-                        place_id=new_item.place_id,
+                        id=item_id,
+                        place_id=item_place_id,
                         place=place_resp,
                         day_index=d_idx,
                         start_time=start_t,
                         end_time=end_t,
-                        cost=new_item.cost,
+                        cost=item_cost,
                     )
                 )
 
-        persisted_days.append(
-            PlanDayResponse(
-                date=d_date,
-                day_index=d_idx,
-                items=day_responses,
+        staged_days.append(
+            (
+                PlanDayResponse(
+                    date=d_date,
+                    day_index=d_idx,
+                    items=day_responses,
+                ),
+                staged_item_kwargs,
             )
         )
 
-    session.commit()
-
-    # Re-validate the rebalanced plan and update its status accordingly
+    # ── Phase 2: Validate BEFORE persisting ──────────────────────────────────
+    # This ensures the correct status is stored on first (and only) commit.
+    persisted_days = [sd for sd, _ in staged_days]
     constraints = list(
         session.exec(select(Constraint).where(Constraint.trip_id == trip.id)).all()
     )
@@ -187,10 +187,24 @@ def rebalance(
     hours_issues = check_open_hours(persisted_days)
     all_issues = budget_issues + travel_issues + hours_issues
     has_errors = any(i.severity == "error" for i in all_issues)
-    new_plan.validation_status = (
-        ValidationStatus.INVALID if has_errors else ValidationStatus.VALID
+    final_status = ValidationStatus.INVALID if has_errors else ValidationStatus.VALID
+
+    # ── Phase 3: Atomic persist — Plan + PlanItems in one commit ─────────────
+    new_plan = Plan(
+        id=str(uuid.uuid4()),
+        trip_id=trip.id,
+        version=current_plan.version + 1,
+        validation_status=final_status,
+        notes=notes,
+        created_at=utc_now(),
     )
     session.add(new_plan)
+    session.flush()  # obtain new_plan.id without a full commit
+
+    for _, staged_item_kwargs in staged_days:
+        for kwargs in staged_item_kwargs:
+            session.add(PlanItem(plan_id=new_plan.id, **kwargs))
+
     session.commit()
 
     return create_plan_response(new_plan, persisted_days)

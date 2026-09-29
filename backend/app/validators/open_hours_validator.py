@@ -47,13 +47,21 @@ def check_open_hours(days: list[PlanDayResponse]) -> list[ValidationIssue]:
                 )
                 continue
 
-            start_hhmm = f"{item.start_time.hour:02d}{item.start_time.minute:02d}"
-            end_hhmm = f"{item.end_time.hour:02d}{item.end_time.minute:02d}"
+            # Use integer comparison to avoid lexicographic ordering bugs with
+            # midnight-crossing venues (e.g. close_hhmm="0100" < start_hhmm="2200").
+            start_int = item.start_time.hour * 100 + item.start_time.minute
+            end_int = item.end_time.hour * 100 + item.end_time.minute
 
             open_hhmm = period_for_day.get("open", {}).get("time", "0000")
             close_hhmm = period_for_day.get("close", {}).get("time", "2359")
+            open_int = int(open_hhmm)
+            close_int = int(close_hhmm)
 
-            if start_hhmm < open_hhmm or end_hhmm > close_hhmm:
+            # Keep formatted strings for display purposes only
+            start_hhmm = f"{item.start_time.hour:02d}{item.start_time.minute:02d}"
+            end_hhmm = f"{item.end_time.hour:02d}{item.end_time.minute:02d}"
+
+            if start_int < open_int or end_int > close_int:
                 formatted_open = f"{open_hhmm[:2]}:{open_hhmm[2:]}"
                 formatted_close = f"{close_hhmm[:2]}:{close_hhmm[2:]}"
                 scheduled_window = (

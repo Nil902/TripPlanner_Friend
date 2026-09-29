@@ -312,6 +312,104 @@ DESTINATION_CATALOG: dict[str, list[CatalogItem]] = {
             "hours": ("1700", "0100"),
         },
     ],
+    "siem reap": [
+        {
+            "name": "Angkor Wat",
+            "category": "landmark",
+            "lat": 13.4125,
+            "lng": 103.8670,
+            "est_cost": 37.0,
+            "hours": ("0500", "1730"),
+        },
+        {
+            "name": "Bayon Temple",
+            "category": "historic",
+            "lat": 13.4414,
+            "lng": 103.8593,
+            "est_cost": 37.0,
+            "hours": ("0730", "1730"),
+        },
+        {
+            "name": "Ta Prohm Temple",
+            "category": "historic",
+            "lat": 13.4349,
+            "lng": 103.8890,
+            "est_cost": 37.0,
+            "hours": ("0730", "1730"),
+        },
+        {
+            "name": "Angkor Thom & South Gate",
+            "category": "landmark",
+            "lat": 13.4414,
+            "lng": 103.8568,
+            "est_cost": 0.0,
+            "hours": ("0500", "1800"),
+        },
+        {
+            "name": "Preah Khan Temple",
+            "category": "historic",
+            "lat": 13.4536,
+            "lng": 103.8714,
+            "est_cost": 37.0,
+            "hours": ("0730", "1730"),
+        },
+        {
+            "name": "Banteay Srei Temple",
+            "category": "historic",
+            "lat": 13.5993,
+            "lng": 103.9659,
+            "est_cost": 37.0,
+            "hours": ("0730", "1730"),
+        },
+        {
+            "name": "Phare Circus",
+            "category": "entertainment",
+            "lat": 13.3521,
+            "lng": 103.8558,
+            "est_cost": 18.0,
+            "hours": ("2000", "2200"),
+        },
+        {
+            "name": "Pub Street Night Market",
+            "category": "entertainment",
+            "lat": 13.3622,
+            "lng": 103.8589,
+            "est_cost": 8.0,
+            "hours": ("1800", "0100"),
+        },
+        {
+            "name": "Khmer Kitchen Restaurant",
+            "category": "restaurant",
+            "lat": 13.3617,
+            "lng": 103.8572,
+            "est_cost": 12.0,
+            "hours": ("0700", "2200"),
+        },
+        {
+            "name": "Siem Reap Floating Village Tour",
+            "category": "culture",
+            "lat": 13.2887,
+            "lng": 103.8713,
+            "est_cost": 20.0,
+            "hours": ("0800", "1700"),
+        },
+        {
+            "name": "Angkor National Museum",
+            "category": "museum",
+            "lat": 13.3643,
+            "lng": 103.8558,
+            "est_cost": 12.0,
+            "hours": ("0830", "1830"),
+        },
+        {
+            "name": "Sunrise at Angkor Wat",
+            "category": "viewpoint",
+            "lat": 13.4127,
+            "lng": 103.8664,
+            "est_cost": 37.0,
+            "hours": ("0430", "0730"),
+        },
+    ],
 }
 
 
@@ -381,11 +479,26 @@ def fetch_from_google_places_api(destination: str) -> list[CatalogItem]:
                 items: list[CatalogItem] = []
                 price_map = {
                     "PRICE_LEVEL_FREE": 0.0,
-                    "PRICE_LEVEL_INEXPENSIVE": 15.0,
-                    "PRICE_LEVEL_MODERATE": 25.0,
-                    "PRICE_LEVEL_EXPENSIVE": 50.0,
-                    "PRICE_LEVEL_VERY_EXPENSIVE": 90.0,
+                    "PRICE_LEVEL_INEXPENSIVE": 12.0,
+                    "PRICE_LEVEL_MODERATE": 22.0,
+                    "PRICE_LEVEL_EXPENSIVE": 48.0,
+                    "PRICE_LEVEL_VERY_EXPENSIVE": 85.0,
                 }
+                dest_lower = destination.lower()
+                is_se_asia = any(
+                    c in dest_lower
+                    for c in (
+                        "cambodia",
+                        "siem reap",
+                        "angkor",
+                        "thailand",
+                        "bangkok",
+                        "vietnam",
+                        "bali",
+                        "indonesia",
+                    )
+                )
+
                 for p in data.get("places", []):
                     name = p.get("displayName", {}).get("text", "")
                     if not name:
@@ -408,8 +521,84 @@ def fetch_from_google_places_api(destination: str) -> list[CatalogItem]:
                     loc = p.get("location", {})
                     lat = float(loc.get("latitude", 0.0))
                     lng = float(loc.get("longitude", 0.0))
-                    price_lvl = p.get("priceLevel", "PRICE_LEVEL_MODERATE")
-                    cost = price_map.get(price_lvl, 20.0)
+
+                    # Determine realistic cost
+                    raw_price_lvl = p.get("priceLevel")
+                    name_lower = name.lower()
+
+                    if raw_price_lvl and raw_price_lvl in price_map:
+                        cost = price_map[raw_price_lvl]
+                    else:
+                        # Google Places API v1 does not provide priceLevel for most tourist sights.
+                        # Estimate realistic cost based on category, name, and destination region.
+                        if cat in ("park", "viewpoint"):
+                            cost = 0.0
+                        elif cat == "museum":
+                            cost = 12.0
+                        elif cat == "restaurant":
+                            cost = 10.0 if is_se_asia else 22.0
+                        elif cat == "entertainment":
+                            cost = 15.0
+                        else:  # landmark / historic
+                            # Free outdoor public spaces
+                            if any(
+                                w in name_lower
+                                for w in (
+                                    "square",
+                                    "plaza",
+                                    "bridge",
+                                    "street",
+                                    "crossing",
+                                    "gate",
+                                    "promenade",
+                                    "quarter",
+                                    "fountain",
+                                    "market",
+                                    "memorial",
+                                    "park",
+                                    "garden",
+                                )
+                            ):
+                                cost = 0.0
+                            elif any(
+                                w in name_lower
+                                for w in (
+                                    "angkor",
+                                    "wat",
+                                    "bayon",
+                                    "ta prohm",
+                                    "banteay srei",
+                                    "preah khan",
+                                )
+                            ):
+                                cost = 37.0  # Official Angkor 1-day pass admission
+                            elif any(
+                                w in name_lower
+                                for w in (
+                                    "tower",
+                                    "summit",
+                                    "observatory",
+                                    "castle",
+                                    "palace",
+                                    "citadel",
+                                )
+                            ):
+                                cost = 18.0
+                            elif any(
+                                w in name_lower
+                                for w in (
+                                    "temple",
+                                    "shrine",
+                                    "pagoda",
+                                    "church",
+                                    "cathedral",
+                                    "basilica",
+                                    "mosque",
+                                )
+                            ):
+                                cost = 5.0
+                            else:
+                                cost = 8.0
 
                     items.append(
                         {

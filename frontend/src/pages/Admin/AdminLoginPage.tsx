@@ -7,6 +7,8 @@ import {
   KeyRound,
   CheckCircle2,
   Server,
+  Eye,
+  EyeOff,
 } from 'lucide-react';
 import {
   PINE,
@@ -33,6 +35,7 @@ export default function AdminLoginPage({
 }: AdminLoginPageProps) {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
+  const [showPassword, setShowPassword] = useState(false);
   const [securityPin, setSecurityPin] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -247,25 +250,50 @@ export default function AdminLoginPage({
             >
               Security Password
             </label>
-            <input
-              id="admin-password"
-              type="password"
-              required
-              value={password}
-              onChange={(e) => setPassword(e.target.value)}
-              placeholder="••••••••••••"
-              style={{
-                width: '100%',
-                padding: '11px 14px',
-                borderRadius: 8,
-                border: '1px solid #484238',
-                background: '#1A1815',
-                color: '#FAF6EE',
-                fontSize: 14,
-                boxSizing: 'border-box',
-                outline: 'none',
-              }}
-            />
+            <div style={{ position: 'relative' }}>
+              <input
+                id="admin-password"
+                type={showPassword ? 'text' : 'password'}
+                required
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                placeholder="••••••••••••"
+                autoComplete="current-password"
+                style={{
+                  width: '100%',
+                  padding: '11px 40px 11px 14px',
+                  borderRadius: 8,
+                  border: '1px solid #484238',
+                  background: '#1A1815',
+                  color: '#FAF6EE',
+                  fontSize: 14,
+                  boxSizing: 'border-box',
+                  outline: 'none',
+                }}
+              />
+              <button
+                type="button"
+                onClick={() => setShowPassword((prev) => !prev)}
+                aria-label={showPassword ? 'Hide characters' : 'Show characters'}
+                title={showPassword ? 'Hide password' : 'Show password'}
+                style={{
+                  position: 'absolute',
+                  right: 10,
+                  top: '50%',
+                  transform: 'translateY(-50%)',
+                  background: 'none',
+                  border: 'none',
+                  cursor: 'pointer',
+                  padding: 4,
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  color: '#7E7667',
+                }}
+              >
+                {showPassword ? <EyeOff size={16} /> : <Eye size={16} />}
+              </button>
+            </div>
           </div>
 
           <div>

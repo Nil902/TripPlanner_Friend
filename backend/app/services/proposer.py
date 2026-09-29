@@ -167,7 +167,9 @@ def propose_schedule(
             )
 
             cost = (
-                selected_place.est_cost if selected_place.est_cost > 0 else default_cost
+                selected_place.est_cost
+                if selected_place.est_cost is not None
+                else default_cost
             )
 
             items.append(
@@ -289,12 +291,12 @@ def call_gemini_proposer(
             '    {"place_id": "<exact id from catalogue>", '
             '"start_time": "YYYY-MM-DDTHH:MM:SS", '
             '"end_time": "YYYY-MM-DDTHH:MM:SS", '
-            '"cost": 15.0}\n'
+            '"cost": <realistic USD cost matching est_cost from catalogue, or 0.0 for free venues>}\n'
             "  ]},\n"
             '  {"day_index": 1, "items": [...]},\n'
             "  ...\n"
             "]}\n\n"
-            "Use ONLY place_ids from the catalogue above. "
+            "Use ONLY place_ids from the catalogue above. Match item cost to the venue's est_cost. "
             "Double-check: no place_id should appear more than once across all days."
         )
 
@@ -643,8 +645,14 @@ def call_gemini_ask(
             "You have deep knowledge of every venue in the confirmed catalogue and the group's "
             "current scheduled itinerary. Answer questions in a concise, practical, and personal "
             "tone — as if you live there. Reference specific venue names, days, and times from "
-            "the itinerary when relevant. Use bullet points for lists. Never make up venues "
-            "that are not in the catalogue.",
+            "the itinerary when relevant. Use bullet points for lists. When the traveler asks "
+            "for MORE recommendations (e.g. 'other temples', 'more museums'), recommend "
+            "additional venues from the catalogue that the traveler hasn't asked about yet, "
+            "even if one or more are already set as must-sees — the traveler wants to discover "
+            "complementary options. Prefer catalogue entries but if the catalogue has very few "
+            "options for a specific type, you may suggest 1-2 well-known real-world alternatives "
+            "and note they are not in the current catalogue. Never invent fictional or "
+            "non-existent places.",
             f"Destination: {trip.destination}",
             f"Trip dates: {trip.start_date} → {trip.end_date}",
         ]

@@ -250,7 +250,6 @@ def get_trip_permissions(
     session: Session = Depends(get_session),
     current_user: User | None = Depends(get_current_user_optional),
     auth: HTTPAuthorizationCredentials | None = Depends(bearer_scheme),
-    x_user_role: str | None = Header(default=None, alias="X-User-Role"),
 ):
     """Check effective trip permissions for creator, joiner, or administrator."""
     trip = session.get(Trip, trip_id)
@@ -274,15 +273,11 @@ def get_trip_permissions(
         if db_user and db_user.is_admin:
             is_admin = True
 
-    if (
-        (uid and uid == trip.creator_id)
-        or is_admin
-        or (x_user_role and x_user_role.strip().lower() in ("creator", "admin"))
-    ):
+    if (uid and uid == trip.creator_id) or is_admin:
         return TripPermissionsResponse(
             can_manage=True,
-            is_creator=True,
-            role="creator",
+            is_creator=uid == trip.creator_id,
+            role="creator" if uid == trip.creator_id else "admin",
         )
 
     return TripPermissionsResponse(

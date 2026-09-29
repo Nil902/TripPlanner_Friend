@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from 'react';
-import { Calendar, AlertTriangle, Plus } from 'lucide-react';
+import { Calendar, AlertTriangle, Plus, Sparkles, Loader2 } from 'lucide-react';
 import {
   BORDER,
   CLAY,
@@ -9,7 +9,7 @@ import {
   SERIF,
   Stop,
 } from '../lib/constants';
-import { SecondaryButton } from '../components/Button';
+import { SecondaryButton, PrimaryButton } from '../components/Button';
 import InteractiveMap from '../components/InteractiveMap';
 import RebalanceModal from '../components/RebalanceModal';
 import DayPicker from '../components/itinerary/DayPicker';
@@ -42,6 +42,9 @@ function getDestinationCenter(dest?: string): { lat: number; lng: number } {
   if (d.includes('paris') || d.includes('france')) return { lat: 48.8566, lng: 2.3522 };
   if (d.includes('new york') || d.includes('nyc')) return { lat: 40.7128, lng: -74.006 };
   if (d.includes('london')) return { lat: 51.5074, lng: -0.1278 };
+  if (d.includes('siem reap') || d.includes('angkor')) return { lat: 13.4125, lng: 103.8670 };
+  if (d.includes('bangkok')) return { lat: 13.7563, lng: 100.5018 };
+  if (d.includes('bali')) return { lat: -8.3405, lng: 115.0920 };
   return { lat: 38.7223, lng: -9.1393 }; // Lisbon default
 }
 
@@ -69,6 +72,16 @@ const DESTINATION_SUGGESTIONS: Record<string, Array<{ name: string; category: st
     { name: 'Sainte-Chapelle', category: 'Sightseeing', cost: 13 },
     { name: 'Centre Pompidou', category: 'Entertainment', cost: 15 },
     { name: 'Montmartre & Sacré-Cœur', category: 'Sightseeing', cost: 0 },
+  ],
+  'siem reap': [
+    { name: 'Angkor Wat', category: 'Sightseeing', cost: 37 },
+    { name: 'Bayon Temple', category: 'Sightseeing', cost: 37 },
+    { name: 'Ta Prohm Temple', category: 'Sightseeing', cost: 37 },
+    { name: 'Angkor Thom & South Gate', category: 'Sightseeing', cost: 0 },
+    { name: 'Phare Circus', category: 'Entertainment', cost: 18 },
+    { name: 'Pub Street Night Market', category: 'Entertainment', cost: 8 },
+    { name: 'Khmer Kitchen Restaurant', category: 'Restaurant', cost: 12 },
+    { name: 'Angkor National Museum', category: 'Museum', cost: 12 },
   ],
 };
 
@@ -163,6 +176,8 @@ export default function ItineraryPage({ tripId }: ItineraryPageProps) {
 
   const [notes, setNotes] = useState<string[]>([]);
   const [isAddingStop, setIsAddingStop] = useState(false);
+  const [isGenerating, setIsGenerating] = useState(false);
+  const [generateError, setGenerateError] = useState<string | null>(null);
 
   // Dynamic Stop data state loaded from backend API
   const [stopsByDay, setStopsByDay] = useState<Record<number, Stop[]>>({});
@@ -217,6 +232,28 @@ export default function ItineraryPage({ tripId }: ItineraryPageProps) {
   useEffect(() => {
     loadPlan();
   }, [loadPlan]);
+
+  const handleGeneratePlan = async () => {
+    setIsGenerating(true);
+    setGenerateError(null);
+    try {
+      const generated = await api.plan.generate(tripId);
+      if (generated) {
+        setPlanVersion(generated.version || 1);
+        setNotes(generated.notes || []);
+        if (generated.days && generated.days.length > 0) {
+          setStopsByDay(convertPlanDaysToStops(generated.days, destination));
+          setTripDays(generated.days.map((d) => d.day_index + 1));
+        }
+      }
+    } catch (err: unknown) {
+      setGenerateError(
+        err instanceof Error ? err.message : 'Failed to generate itinerary. Please try again.',
+      );
+    } finally {
+      setIsGenerating(false);
+    }
+  };
 
   const handleAddStop = async (newStop: Omit<Stop, 'id'>) => {
     const dayIdx = day - 1;
@@ -298,6 +335,9 @@ export default function ItineraryPage({ tripId }: ItineraryPageProps) {
   const destKey = destination.toLowerCase().trim();
   const suggestedStops =
     DESTINATION_SUGGESTIONS[destKey] ||
+    (destKey.includes('siem reap') || destKey.includes('angkor')
+      ? DESTINATION_SUGGESTIONS['siem reap']
+      : null) ||
     (destKey.includes('tokyo') ? DESTINATION_SUGGESTIONS['tokyo'] : null) ||
     (destKey.includes('paris') ? DESTINATION_SUGGESTIONS['paris'] : null) ||
     DESTINATION_SUGGESTIONS['lisbon'];
@@ -349,6 +389,26 @@ export default function ItineraryPage({ tripId }: ItineraryPageProps) {
         </div>
 
         <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+          {/* ── AI Generate Itinerary Button ── */}
+          <PrimaryButton
+            onClick={handleGeneratePlan}
+            disabled={isGenerating}
+            style={{
+              fontSize: 13,
+              padding: '8px 16px',
+              display: 'inline-flex',
+              alignItems: 'center',
+              gap: 6,
+            }}
+          >
+            {isGenerating ? (
+              <Loader2 size={14} style={{ animation: 'spin 1s linear infinite' }} />
+            ) : (
+              <Sparkles size={14} />
+            )}
+            {isGenerating ? 'Generating…' : 'Generate with AI'}
+          </PrimaryButton>
+
           <SecondaryButton
             onClick={() => {
               const url = api.plan.getExportIcsUrl(tripId);
@@ -380,6 +440,47 @@ export default function ItineraryPage({ tripId }: ItineraryPageProps) {
         </div>
       </div>
 
+      {/* Generate Error Banner */}
+      {generateError && (
+        <div
+          role="alert"
+          style={{
+            marginBottom: 16,
+            padding: '10px 14px',
+            borderRadius: 8,
+            background: '#FBF0E8',
+            border: `1px solid ${CLAY}`,
+            display: 'flex',
+            alignItems: 'center',
+            gap: 8,
+            fontSize: 13,
+            color: CLAY,
+          }}
+        >
+          <AlertTriangle size={14} style={{ flexShrink: 0 }} />
+          <span>{generateError}</span>
+          <button
+            type="button"
+            onClick={() => setGenerateError(null)}
+            style={{
+              marginLeft: 'auto',
+              background: 'none',
+              border: 'none',
+              color: CLAY,
+              cursor: 'pointer',
+              fontSize: 16,
+              lineHeight: 1,
+              padding: '0 2px',
+            }}
+          >
+            ×
+          </button>
+        </div>
+      )}
+
+      {/* Spin keyframes injected once */}
+      <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
+
       {/* Disruption Diff Report (if triggered) */}
       <DisruptionDiffReport
         diff={activeDiff}
@@ -396,7 +497,7 @@ export default function ItineraryPage({ tripId }: ItineraryPageProps) {
       />
 
       {/* Interactive Ask-the-Agent Q&A Panel */}
-      <AgentAskPanel tripId={tripId} />
+      <AgentAskPanel tripId={tripId} destination={destination} />
 
       {/* Interactive Map Visualizing Spatial Geometry */}
       <InteractiveMap stops={currentStops} dayIndex={day} />

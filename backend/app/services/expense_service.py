@@ -84,12 +84,14 @@ def calculate_settle_up(
             )
         )
 
-        debtor.amount -= settle_amount
-        creditor.amount -= settle_amount
+        debtor.amount = round(debtor.amount - settle_amount, 2)
+        creditor.amount = round(creditor.amount - settle_amount, 2)
 
-        if debtor.amount <= 0.01:
+        # Advance each pointer independently to avoid skipping a partially-settled party.
+        # Use a tight epsilon (< 0.005) so rounding artefacts don't stall the loop.
+        if debtor.amount < 0.005:
             d_idx += 1
-        if creditor.amount <= 0.01:
+        if creditor.amount < 0.005:
             c_idx += 1
 
     return SettleUpReport(

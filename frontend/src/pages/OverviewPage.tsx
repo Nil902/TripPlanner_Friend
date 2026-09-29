@@ -56,6 +56,16 @@ const DESTINATION_SUGGESTIONS: Record<string, Array<{ name: string; category: st
     { name: 'Centre Pompidou', category: 'Entertainment', cost: 15 },
     { name: 'Montmartre & Sacré-Cœur', category: 'Viewpoint', cost: 0 },
   ],
+  'siem reap': [
+    { name: 'Angkor Wat', category: 'Landmark', cost: 37 },
+    { name: 'Bayon Temple', category: 'Historic', cost: 37 },
+    { name: 'Ta Prohm Temple', category: 'Historic', cost: 37 },
+    { name: 'Angkor Thom & South Gate', category: 'Landmark', cost: 0 },
+    { name: 'Phare Circus', category: 'Entertainment', cost: 18 },
+    { name: 'Pub Street Night Market', category: 'Entertainment', cost: 8 },
+    { name: 'Khmer Kitchen Restaurant', category: 'Restaurant', cost: 12 },
+    { name: 'Angkor National Museum', category: 'Museum', cost: 12 },
+  ],
 };
 
 
@@ -99,13 +109,20 @@ export default function OverviewPage({
     Array<{ id?: string; day: number; name: string; time: string; cost: number; category: string }>
   >([]);
 
-  const destKey = (trip?.destination || '').toLowerCase();
-  const suggestions = DESTINATION_SUGGESTIONS[destKey] || [
-    { name: 'City Center Historic Walk', category: 'Landmark', cost: 0 },
-    { name: 'Central Food Market', category: 'Restaurant', cost: 20 },
-    { name: 'National Art Museum', category: 'Museum', cost: 12 },
-    { name: 'Scenic Panoramic Viewpoint', category: 'Viewpoint', cost: 0 },
-  ];
+  const destKey = (trip?.destination || '').toLowerCase().trim();
+  const suggestions =
+    DESTINATION_SUGGESTIONS[destKey] ||
+    (destKey.includes('siem reap') || destKey.includes('angkor')
+      ? DESTINATION_SUGGESTIONS['siem reap']
+      : null) ||
+    (destKey.includes('tokyo') ? DESTINATION_SUGGESTIONS['tokyo'] : null) ||
+    (destKey.includes('paris') ? DESTINATION_SUGGESTIONS['paris'] : null) ||
+    DESTINATION_SUGGESTIONS['lisbon'] || [
+      { name: 'City Center Historic Walk', category: 'Landmark', cost: 0 },
+      { name: 'Central Food Market', category: 'Restaurant', cost: 20 },
+      { name: 'National Art Museum', category: 'Museum', cost: 12 },
+      { name: 'Scenic Panoramic Viewpoint', category: 'Viewpoint', cost: 0 },
+    ];
 
   const refreshPlanStops = useCallback(() => {
     if (!trip?.id) return;

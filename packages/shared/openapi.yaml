@@ -1111,6 +1111,7 @@ components:
 
     CreatePlanItemRequest:
       type: object
+      description: Latitude and longitude must be supplied together when known.
       required:
         - day_index
         - place_name
@@ -1121,6 +1122,7 @@ components:
           type: integer
         place_name:
           type: string
+          minLength: 1
         category:
           type: string
         start_time:
@@ -1131,18 +1133,25 @@ components:
           format: date-time
         cost:
           type: number
+          minimum: 0
         lat:
           type: number
+          minimum: -90
+          maximum: 90
         lng:
           type: number
+          minimum: -180
+          maximum: 180
 
     UpdatePlanItemRequest:
       type: object
+      description: Latitude and longitude must be supplied together when updated.
       properties:
         day_index:
           type: integer
         place_name:
           type: string
+          minLength: 1
         category:
           type: string
         start_time:
@@ -1153,10 +1162,15 @@ components:
           format: date-time
         cost:
           type: number
+          minimum: 0
         lat:
           type: number
+          minimum: -90
+          maximum: 90
         lng:
           type: number
+          minimum: -180
+          maximum: 180
 
     RefinePlanRequest:
       type: object

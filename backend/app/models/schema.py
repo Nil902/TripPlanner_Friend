@@ -308,8 +308,8 @@ class CreatePlanItemRequest(BaseModel):
     start_time: datetime
     end_time: datetime
     cost: float = 0.0
-    lat: float | None = 0.0
-    lng: float | None = 0.0
+    lat: float | None = None
+    lng: float | None = None
 
 
 class UpdatePlanItemRequest(BaseModel):

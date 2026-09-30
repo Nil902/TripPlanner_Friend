@@ -3,6 +3,7 @@ Places service for querying and caching candidate venues.
 """
 
 import logging
+import math
 import time
 from typing import TypedDict
 
@@ -515,9 +516,22 @@ def fetch_from_google_places_api(destination: str) -> list[CatalogItem]:
                     else:
                         cat = "landmark"
 
-                    loc = p.get("location", {})
-                    lat = float(loc.get("latitude", 0.0))
-                    lng = float(loc.get("longitude", 0.0))
+                    loc = p.get("location")
+                    if not isinstance(loc, dict):
+                        continue
+                    try:
+                        lat = float(loc["latitude"])
+                        lng = float(loc["longitude"])
+                    except (KeyError, TypeError, ValueError):
+                        continue
+                    if (
+                        not math.isfinite(lat)
+                        or not math.isfinite(lng)
+                        or not -90 <= lat <= 90
+                        or not -180 <= lng <= 180
+                        or (lat == 0.0 and lng == 0.0)
+                    ):
+                        continue
 
                     # Determine realistic cost
                     raw_price_lvl = p.get("priceLevel")
@@ -701,9 +715,9 @@ def fetch_google_distance_matrix(
 
 
 def get_or_create_places_for_destination(
-    session: Session, destination: str
+    session: Session, destination: str, *, commit_cache: bool = True
 ) -> list[Place]:
-    """Retrieve or generate cached candidate venues for a given destination."""
+    """Retrieve candidate venues, optionally deferring cache commit to the caller."""
     dest_key = destination.lower().split(",")[0].strip()
     catalog: list[CatalogItem] = DESTINATION_CATALOG.get(dest_key, [])
 
@@ -718,6 +732,7 @@ def get_or_create_places_for_destination(
         return []
 
     places: list[Place] = []
+    added_places = False
     for item in catalog:
         name_str = str(item["name"])
         cat_str = str(item["category"])
@@ -744,9 +759,13 @@ def get_or_create_places_for_destination(
                 cached_at=utc_now(),
             )
             session.add(existing)
-            session.commit()
-            session.refresh(existing)
+            added_places = True
         places.append(existing)
+
+    if added_places:
+        session.flush()
+        if commit_cache:
+            session.commit()
 
     return places
 

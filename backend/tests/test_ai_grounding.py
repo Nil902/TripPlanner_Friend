@@ -107,6 +107,49 @@ def test_plan_and_items_roll_back_together_on_item_insert_failure() -> None:
         assert saved_plans == []
 
 
+def test_venue_cache_can_join_manual_edit_transaction(monkeypatch) -> None:
+    destination = f"atomic-cache-{uuid.uuid4().hex}"
+    monkeypatch.setitem(
+        places_service.DESTINATION_CATALOG,
+        destination,
+        [
+            {
+                "name": "Verified Example",
+                "category": "museum",
+                "lat": 38.7,
+                "lng": -9.1,
+                "est_cost": 10.0,
+                "hours": None,
+            }
+        ],
+    )
+    trip = Trip(
+        title="Cache transaction",
+        destination=destination,
+        start_date=date(2026, 10, 1),
+        end_date=date(2026, 10, 1),
+        creator_id="atomic-cache-owner",
+    )
+    with Session(engine) as session:
+        session.add(trip)
+        session.commit()
+        trip_id = trip.id
+        pending_plan = Plan(trip_id=trip_id, version=1)
+        session.add(pending_plan)
+        cached = places_service.get_or_create_places_for_destination(
+            session, destination, commit_cache=False
+        )
+        cached_place_id = cached[0].place_id
+        session.rollback()
+
+    with Session(engine) as verification_session:
+        assert (
+            verification_session.exec(select(Plan).where(Plan.trip_id == trip_id)).all()
+            == []
+        )
+        assert verification_session.get(Place, cached_place_id) is None
+
+
 def test_llm_uses_catalogue_price_and_rejects_wrong_dates(monkeypatch):
     place = Place(
         place_id="known_venue",
@@ -432,11 +475,16 @@ def test_live_places_do_not_invent_opening_hours(monkeypatch):
                 json={
                     "places": [
                         {
+                            "id": "missing_location",
+                            "displayName": {"text": "Unlocated Museum"},
+                            "primaryType": "museum",
+                        },
+                        {
                             "id": "google_place",
                             "displayName": {"text": "Verified Museum"},
                             "primaryType": "museum",
                             "location": {"latitude": 10.0, "longitude": 20.0},
-                        }
+                        },
                     ]
                 },
             )
@@ -450,6 +498,7 @@ def test_live_places_do_not_invent_opening_hours(monkeypatch):
             session, "Verified Example City"
         )
     assert len(places) == 1
+    assert places[0].name == "Verified Museum"
     assert places[0].opening_hours is None
 
 

@@ -1,4 +1,5 @@
 import logging
+import math
 import uuid
 from datetime import datetime
 
@@ -47,6 +48,27 @@ from app.validators.travel_validator import check_travel_time
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/v1/trips/{trip_id}/plan", tags=["Plan"])
+
+
+def validate_coordinates(lat: float | None, lng: float | None) -> None:
+    """Reject partial and impossible coordinate pairs before saving a stop."""
+    if (lat is None) != (lng is None) or (
+        lat is not None
+        and lng is not None
+        and (
+            not math.isfinite(lat)
+            or not math.isfinite(lng)
+            or not -90 <= lat <= 90
+            or not -180 <= lng <= 180
+        )
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={
+                "code": "INVALID_COORDINATES",
+                "message": "Provide valid latitude and longitude together.",
+            },
+        )
 
 
 def assemble_plan_response(session: Session, trip: Trip, plan: Plan) -> PlanResponse:
@@ -290,14 +312,22 @@ def add_plan_item(
             },
         )
 
-    if req.cost < 0:
+    if not req.place_name.strip():
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={"code": "INVALID_PLACE_NAME", "message": "Place name is required."},
+        )
+
+    if not math.isfinite(req.cost) or req.cost < 0:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail={
                 "code": "INVALID_COST",
-                "message": "cost cannot be negative.",
+                "message": "Cost must be finite and nonnegative.",
             },
         )
+
+    validate_coordinates(req.lat, req.lng)
 
     previous = session.exec(
         select(Plan).where(Plan.trip_id == trip_id).order_by(col(Plan.version).desc())
@@ -325,20 +355,21 @@ def add_plan_item(
     resolved_lat = req.lat
     resolved_lng = req.lng
 
-    candidate_places = get_or_create_places_for_destination(session, trip.destination)
-
     # Only use coordinates verified from the request or an exact catalog match.
     if (
-        not resolved_lat
-        or not resolved_lng
+        resolved_lat is None
+        or resolved_lng is None
         or (resolved_lat == 0.0 and resolved_lng == 0.0)
     ):
+        candidate_places = get_or_create_places_for_destination(
+            session, trip.destination, commit_cache=False
+        )
         norm_name = req.place_name.lower().strip()
         matched = next(
             (p for p in candidate_places if norm_name == p.name.lower().strip()),
             None,
         )
-        if matched and matched.lat and matched.lng:
+        if matched and (matched.lat != 0.0 or matched.lng != 0.0):
             resolved_lat = matched.lat
             resolved_lng = matched.lng
             if not req.category or req.category == "attraction":
@@ -428,14 +459,22 @@ def update_plan_item(
             },
         )
 
-    if req.cost is not None and req.cost < 0:
+    if req.place_name is not None and not req.place_name.strip():
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={"code": "INVALID_PLACE_NAME", "message": "Place name is required."},
+        )
+
+    if req.cost is not None and (not math.isfinite(req.cost) or req.cost < 0):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail={
                 "code": "INVALID_COST",
-                "message": "cost cannot be negative.",
+                "message": "Cost must be finite and nonnegative.",
             },
         )
+
+    validate_coordinates(req.lat, req.lng)
 
     target_date = day_dates[new_day_index]
     new_start = datetime.combine(
@@ -463,14 +502,18 @@ def update_plan_item(
     if place and any(
         value is not None for value in (req.place_name, req.category, req.lat, req.lng)
     ):
+        renamed = (
+            req.place_name is not None
+            and req.place_name.strip().casefold() != place.name.strip().casefold()
+        )
         place = Place(
             place_id=f"custom_{uuid.uuid4().hex}",
             name=req.place_name if req.place_name is not None else place.name,
             category=req.category if req.category is not None else place.category,
-            lat=req.lat if req.lat is not None else place.lat,
-            lng=req.lng if req.lng is not None else place.lng,
+            lat=req.lat if req.lat is not None else (0.0 if renamed else place.lat),
+            lng=req.lng if req.lng is not None else (0.0 if renamed else place.lng),
             est_cost=req.cost if req.cost is not None else place.est_cost,
-            opening_hours=place.opening_hours,
+            opening_hours=None if renamed else place.opening_hours,
         )
         session.add(place)
         item.place_id = place.place_id
@@ -735,7 +778,7 @@ def _fallback_ask_answer(
     if not places:
         return (
             f"No venue data is available yet for {trip.destination}. "
-            "Generate a plan first so the agent can recommend the best spots."
+            "Try again later or add a place manually."
         )
 
     q = question.lower()
@@ -794,12 +837,13 @@ def _fallback_ask_answer(
                 if p.est_cost == 0
                 else f"${p.est_cost:.0f}"
             )
-            open_time = "0730"
+            open_time: str | None = None
             if p.opening_hours:
                 periods = p.opening_hours.get("periods", [])
                 if periods:
-                    open_time = periods[0].get("open", {}).get("time", "0730")
-            add_bullet(p.name, f"{cost_str}, opens {open_time}")
+                    open_time = periods[0].get("open", {}).get("time")
+            detail = f"{cost_str}, opens {open_time}" if open_time else cost_str
+            add_bullet(p.name, detail)
 
     if any(w in q for w in MUSEUM_WORDS):
         museums = [p for p in places if p.category == "museum"]

@@ -7,9 +7,35 @@ Uses the deterministic fallback response by stubbing out the Gemini API key.
 import pytest
 from httpx import ASGITransport, AsyncClient
 
+from app.api.plan import _fallback_ask_answer
 from app.main import app
+from app.models.schema import Place, Trip
 from app.services import proposer
 from tests.support import register_creator
+
+
+def test_fallback_answer_does_not_invent_opening_time() -> None:
+    trip = Trip(title="Temple visit", destination="Example City", creator_id="owner")
+    place = Place(
+        place_id="unknown_hours_temple",
+        name="Example Temple",
+        category="landmark",
+        lat=10.0,
+        lng=20.0,
+        est_cost=5.0,
+        opening_hours=None,
+    )
+    answer = _fallback_ask_answer(trip, [place], "Which temple should I visit?")
+    assert "Example Temple" in answer
+    assert "opens" not in answer
+
+
+def test_fallback_answer_does_not_suggest_impossible_generation() -> None:
+    trip = Trip(title="Unknown destination", destination="Unknown", creator_id="owner")
+    answer = _fallback_ask_answer(trip, [], "Where should I visit?")
+    assert "No venue data" in answer
+    assert "add a place manually" in answer
+    assert "Generate a plan" not in answer
 
 
 @pytest.mark.asyncio

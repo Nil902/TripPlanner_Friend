@@ -195,3 +195,52 @@ async def test_manual_add_item_without_prior_plan():
         )
         assert moved.status_code == 200
         assert moved.json()["start_time"].startswith("2026-07-12")
+
+        partial_coordinates = await client.post(
+            f"/api/v1/trips/{trip_id}/plan/items",
+            json={
+                "day_index": 0,
+                "place_name": "Incomplete location",
+                "start_time": "2026-07-10T09:00:00",
+                "end_time": "2026-07-10T10:00:00",
+                "lat": 0.0,
+            },
+        )
+        assert partial_coordinates.status_code == 400
+        assert partial_coordinates.json()["detail"]["code"] == "INVALID_COORDINATES"
+
+        blank_name = await client.post(
+            f"/api/v1/trips/{trip_id}/plan/items",
+            json={
+                "day_index": 0,
+                "place_name": "   ",
+                "start_time": "2026-07-10T09:00:00",
+                "end_time": "2026-07-10T10:00:00",
+            },
+        )
+        assert blank_name.status_code == 400
+        assert blank_name.json()["detail"]["code"] == "INVALID_PLACE_NAME"
+
+        renamed = await client.put(
+            f"/api/v1/trips/{trip_id}/plan/items/{moved.json()['id']}",
+            json={"place_name": "Unknown replacement"},
+        )
+        assert renamed.status_code == 200
+        assert renamed.json()["place"]["lat"] == 0.0
+        assert renamed.json()["place"]["lng"] == 0.0
+        assert renamed.json()["place"]["opening_hours"] is None
+
+        equator = await client.post(
+            f"/api/v1/trips/{trip_id}/plan/items",
+            json={
+                "day_index": 0,
+                "place_name": "Equator stop",
+                "start_time": "2026-07-10T09:00:00",
+                "end_time": "2026-07-10T10:00:00",
+                "lat": 0.0,
+                "lng": 20.0,
+            },
+        )
+        assert equator.status_code == 200
+        assert equator.json()["place"]["lat"] == 0.0
+        assert equator.json()["place"]["lng"] == 20.0

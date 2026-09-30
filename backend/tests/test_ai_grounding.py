@@ -7,7 +7,7 @@ from datetime import date, datetime
 import httpx
 import pytest
 from httpx import ASGITransport, AsyncClient
-from sqlalchemy import event
+from sqlalchemy import DateTime, event
 from sqlmodel import Session, select
 
 from app.core.db import engine
@@ -33,6 +33,13 @@ from app.services.agent_planner import (
 )
 from app.validators.place_constraint_validator import check_place_constraints
 from tests.support import join_guest, register_creator
+
+
+def test_plan_items_keep_destination_local_wall_times() -> None:
+    """SQLModel's newer UTC default must not reject naive itinerary times."""
+    for column in (PlanItem.__table__.c.start_time, PlanItem.__table__.c.end_time):
+        assert isinstance(column.type, DateTime)
+        assert column.type.timezone is False
 
 
 @pytest.mark.asyncio
@@ -497,9 +504,9 @@ def test_live_places_do_not_invent_opening_hours(monkeypatch):
         places = places_service.get_or_create_places_for_destination(
             session, "Verified Example City"
         )
-    assert len(places) == 1
-    assert places[0].name == "Verified Museum"
-    assert places[0].opening_hours is None
+        assert len(places) == 1
+        assert places[0].name == "Verified Museum"
+        assert places[0].opening_hours is None
 
 
 @pytest.mark.asyncio

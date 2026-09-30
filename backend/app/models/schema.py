@@ -8,6 +8,7 @@ from enum import StrEnum
 from typing import Any
 
 from pydantic import BaseModel
+from sqlalchemy import DateTime
 from sqlmodel import JSON, Column, Field, SQLModel
 
 
@@ -147,8 +148,12 @@ class PlanItem(SQLModel, table=True):
     plan_id: str = Field(foreign_key="plans.id", index=True)
     place_id: str = Field(foreign_key="places.place_id", index=True)
     day_index: int = Field(default=0, index=True)
-    start_time: datetime = Field()
-    end_time: datetime = Field()
+    # Itinerary stops are destination-local wall times. Their IANA timezone is
+    # not stored on Trip, so interpreting them as UTC would change their meaning.
+    # Explicit types also preserve compatibility with SQLModel 0.0.45+, which
+    # otherwise maps plain datetime fields to timezone-aware UTCDateTime.
+    start_time: datetime = Field(sa_column=Column(DateTime(timezone=False)))
+    end_time: datetime = Field(sa_column=Column(DateTime(timezone=False)))
     cost: float = Field(default=0.0)
 
 

@@ -48,7 +48,7 @@ export default function CreateTripModal({
         destination: destination.trim(),
         start_date: startDate,
         end_date: endDate,
-        creator_id: creatorId || 'alice',
+        creator_id: creatorId,
       });
 
       onCreated({
@@ -59,23 +59,11 @@ export default function CreateTripModal({
         end_date: newTrip.end_date,
         creator_id: newTrip.creator_id,
         status: newTrip.status || 'collecting_constraints',
-        member_ids: newTrip.member_ids || [creatorId || 'alice'],
+        member_ids: newTrip.member_ids || [creatorId],
       });
       onClose();
     } catch (err: unknown) {
-      // Fallback: create locally if backend is temporarily unreachable
-      const fallbackTrip: TripSummary = {
-        id: `trip-${Date.now().toString().slice(-4)}`,
-        title: title.trim(),
-        destination: destination.trim(),
-        start_date: startDate,
-        end_date: endDate,
-        creator_id: creatorId || 'alice',
-        status: 'collecting_constraints',
-        member_ids: [creatorId || 'alice'],
-      };
-      onCreated(fallbackTrip);
-      onClose();
+      setError(err instanceof Error ? err.message : 'Unable to create the trip. Try again.');
     } finally {
       setIsLoading(false);
     }

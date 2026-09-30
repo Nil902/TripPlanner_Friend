@@ -6,6 +6,7 @@ import pytest
 from httpx import ASGITransport, AsyncClient
 
 from app.main import app
+from tests.support import join_guest, register_creator
 
 
 @pytest.mark.asyncio
@@ -13,13 +14,14 @@ async def test_full_trip_and_planning_lifecycle():
     """Verify trip creation, constraints submission, strict planning loop, editing, and rebalancing."""
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as client:
+        creator_id = await register_creator(client)
         # 1. Create a trip
         trip_payload = {
             "title": "Lisbon Culinary & Culture Escape",
             "destination": "Lisbon, Portugal",
             "start_date": "2026-10-01",
             "end_date": "2026-10-03",
-            "creator_id": "creator_1",
+            "creator_id": creator_id,
         }
         trip_res = await client.post("/api/v1/trips", json=trip_payload)
         assert trip_res.status_code == 201
@@ -37,8 +39,9 @@ async def test_full_trip_and_planning_lifecycle():
         assert update_res.json()["title"] == "Updated Lisbon Expedition"
 
         # 3. Submit constraints for 2 members (Alice and Bob)
+        bob_id, bob_headers = await join_guest(client, trip_id, "Bob")
         alice_c = {
-            "user_id": "alice",
+            "user_id": creator_id,
             "budget_per_day": 60.0,
             "dietary": ["vegetarian"],
             "style_tags": ["foodie", "relaxed"],
@@ -46,7 +49,7 @@ async def test_full_trip_and_planning_lifecycle():
             "must_avoid": [],
         }
         bob_c = {
-            "user_id": "bob",
+            "user_id": bob_id,
             "budget_per_day": 90.0,
             "dietary": [],
             "style_tags": ["historic"],
@@ -54,7 +57,9 @@ async def test_full_trip_and_planning_lifecycle():
             "must_avoid": ["nightclub"],
         }
         res_a = await client.post(f"/api/v1/trips/{trip_id}/constraints", json=alice_c)
-        res_b = await client.post(f"/api/v1/trips/{trip_id}/constraints", json=bob_c)
+        res_b = await client.post(
+            f"/api/v1/trips/{trip_id}/constraints", json=bob_c, headers=bob_headers
+        )
         assert res_a.status_code == 200
         assert res_b.status_code == 200
 
@@ -71,6 +76,18 @@ async def test_full_trip_and_planning_lifecycle():
         assert plan["version"] == 1
         assert len(plan["days"]) == 3
         assert len(plan["notes"]) > 0
+
+        missing_venue = await client.post(
+            f"/api/v1/trips/{trip_id}/rebalance",
+            json={"type": "venue_closed", "day_index": 0},
+        )
+        assert missing_venue.status_code == 400
+        assert missing_venue.json()["detail"]["code"] == "VENUE_NOT_IN_PLAN"
+        unsupported_weather = await client.post(
+            f"/api/v1/trips/{trip_id}/rebalance",
+            json={"type": "weather_alert", "day_index": 0},
+        )
+        assert unsupported_weather.status_code == 422
 
         # 5. Validate the plan
         val_res = await client.post(f"/api/v1/trips/{trip_id}/plan/validate")
@@ -94,25 +111,51 @@ async def test_full_trip_and_planning_lifecycle():
             f"/api/v1/trips/{trip_id}/plan/items", json=custom_item
         )
         assert add_res.status_code == 200
-        added_id = add_res.json()["id"]
+        after_add = (await client.get(f"/api/v1/trips/{trip_id}/plan")).json()
+        assert after_add["version"] == 2
+        assert (
+            await client.get(f"/api/v1/trips/{trip_id}/plan?version=1")
+        ).json() == plan
+        current_first = next(
+            item
+            for day in after_add["days"]
+            for item in day["items"]
+            if item["place_id"] == first_item["place_id"]
+        )
 
         # Edit existing item (Always allow all the edit)
         edit_res = await client.put(
-            f"/api/v1/trips/{trip_id}/plan/items/{first_item['id']}",
+            f"/api/v1/trips/{trip_id}/plan/items/{current_first['id']}",
             json={"cost": 0.0, "place_name": "Free Morning Walk"},
         )
         assert edit_res.status_code == 200
         assert edit_res.json()["cost"] == 0.0
+        after_edit = (await client.get(f"/api/v1/trips/{trip_id}/plan")).json()
+        assert after_edit["version"] == 3
+        assert (
+            await client.get(f"/api/v1/trips/{trip_id}/plan?version=1")
+        ).json() == plan
 
         # Delete the added item
-        del_res = await client.delete(f"/api/v1/trips/{trip_id}/plan/items/{added_id}")
+        current_added = next(
+            item
+            for day in after_edit["days"]
+            for item in day["items"]
+            if item["place_id"] == add_res.json()["place_id"]
+        )
+        del_res = await client.delete(
+            f"/api/v1/trips/{trip_id}/plan/items/{current_added['id']}"
+        )
         assert del_res.status_code == 204
+        assert (await client.get(f"/api/v1/trips/{trip_id}/plan")).json()[
+            "version"
+        ] == 4
 
         # 7. Simulate Disruption and Trigger Dynamic Rebalancer
         disruption_payload = {
             "type": "venue_closed",
             "day_index": 0,
-            "place_id": first_item["place_id"],
+            "place_id": edit_res.json()["place_id"],
             "description": "Unscheduled restoration closure",
         }
         reb_res = await client.post(
@@ -120,5 +163,5 @@ async def test_full_trip_and_planning_lifecycle():
         )
         assert reb_res.status_code == 200
         new_plan = reb_res.json()
-        assert new_plan["version"] == 2
+        assert new_plan["version"] == 5
         assert len(new_plan["days"]) == 3

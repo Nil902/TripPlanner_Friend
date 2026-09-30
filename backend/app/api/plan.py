@@ -1,6 +1,4 @@
-import asyncio
 import logging
-import math
 import uuid
 from datetime import datetime
 
@@ -8,6 +6,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
 from sqlmodel import Session, col, select
 
 from app.core.db import get_session
+from app.core.security import TripAccess, get_trip_access, require_trip_manager
 from app.models.schema import (
     AskAgentRequest,
     AskAgentResponse,
@@ -24,11 +23,16 @@ from app.models.schema import (
     Trip,
     TripStatus,
     UpdatePlanItemRequest,
+    ValidationIssue,
     ValidationResult,
     ValidationStatus,
-    utc_now,
 )
-from app.services.agent_planner import AgentPlanner, create_plan_response
+from app.services.agent_planner import (
+    AgentPlanner,
+    CandidatePlacesUnavailableError,
+    UnsatisfiableExclusionsError,
+    create_plan_response,
+)
 from app.services.places_service import get_or_create_places_for_destination
 from app.services.proposer import (
     FOOD_CATEGORIES,
@@ -37,6 +41,7 @@ from app.services.proposer import (
 )
 from app.validators.budget_validator import check_budget
 from app.validators.open_hours_validator import check_open_hours
+from app.validators.place_constraint_validator import check_place_constraints
 from app.validators.travel_validator import check_travel_time
 
 logger = logging.getLogger(__name__)
@@ -92,9 +97,10 @@ def assemble_plan_response(session: Session, trip: Trip, plan: Plan) -> PlanResp
 
 
 @router.post("", response_model=PlanResponse)
-async def generate_plan(
+def generate_plan(
     trip_id: str,
     session: Session = Depends(get_session),
+    access: TripAccess = Depends(require_trip_manager),
 ) -> PlanResponse:
     """Trigger the autonomous agent propose-validate-rebalance planning loop."""
     trip = session.get(Trip, trip_id)
@@ -112,11 +118,23 @@ async def generate_plan(
     ).all()
 
     try:
-        loop = asyncio.get_event_loop()
-        plan_response = await loop.run_in_executor(
-            None,
-            lambda: AgentPlanner.generate_plan(session, trip, list(constraints)),
-        )
+        plan_response = AgentPlanner.generate_plan(session, trip, list(constraints))
+    except CandidatePlacesUnavailableError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail={
+                "code": "PLACES_UNAVAILABLE",
+                "message": "No verified venues are available for this destination yet. Try again later.",
+            },
+        ) from exc
+    except UnsatisfiableExclusionsError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail={
+                "code": "NO_ALLOWED_PLACES",
+                "message": "All available venues conflict with the group's must-avoid rules.",
+            },
+        ) from exc
     except Exception as exc:
         logger.exception("Agent planning loop failed for trip %s", trip_id)
         raise HTTPException(
@@ -135,11 +153,43 @@ async def generate_plan(
     return plan_response
 
 
+def clone_plan_for_edit(
+    session: Session, previous: Plan
+) -> tuple[Plan, dict[str, PlanItem]]:
+    """Copy the latest version so manual edits preserve every earlier itinerary."""
+    plan = Plan(
+        trip_id=previous.trip_id,
+        version=previous.version + 1,
+        validation_status=ValidationStatus.PARTIAL,
+        notes=[
+            *(previous.notes or []),
+            "Manually edited; validate the updated itinerary.",
+        ],
+    )
+    session.add(plan)
+    session.flush()
+    copied: dict[str, PlanItem] = {}
+    for old in session.exec(select(PlanItem).where(PlanItem.plan_id == previous.id)):
+        item = PlanItem(
+            plan_id=plan.id,
+            place_id=old.place_id,
+            day_index=old.day_index,
+            start_time=old.start_time,
+            end_time=old.end_time,
+            cost=old.cost,
+        )
+        session.add(item)
+        copied[old.id] = item
+    session.flush()
+    return plan, copied
+
+
 @router.get("", response_model=PlanResponse)
 def get_plan(
     trip_id: str,
     version: int | None = Query(None, description="Optional specific plan version"),
     session: Session = Depends(get_session),
+    access: TripAccess = Depends(get_trip_access),
 ):
     """Get the latest plan or a specific version."""
     trip = session.get(Trip, trip_id)
@@ -175,6 +225,7 @@ def get_plan(
 def list_plan_versions(
     trip_id: str,
     session: Session = Depends(get_session),
+    access: TripAccess = Depends(get_trip_access),
 ) -> list[dict]:
     """List all available plan versions for this trip."""
     trip = session.get(Trip, trip_id)
@@ -207,6 +258,7 @@ def add_plan_item(
     trip_id: str,
     req: CreatePlanItemRequest,
     session: Session = Depends(get_session),
+    access: TripAccess = Depends(require_trip_manager),
 ):
     """Add a custom plan item to the latest plan (Always allow all edits)."""
     trip = session.get(Trip, trip_id)
@@ -219,16 +271,17 @@ def add_plan_item(
             },
         )
 
-    if req.day_index < 0:
+    day_dates = build_day_dates(trip.start_date, trip.end_date)
+    if req.day_index < 0 or req.day_index >= len(day_dates):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail={
                 "code": "INVALID_DAY_INDEX",
-                "message": "day_index must be a non-negative integer.",
+                "message": "day_index must be within the trip dates.",
             },
         )
 
-    if req.end_time <= req.start_time:
+    if req.end_time.time() <= req.start_time.time():
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail={
@@ -246,35 +299,27 @@ def add_plan_item(
             },
         )
 
-    plan = session.exec(
+    previous = session.exec(
         select(Plan).where(Plan.trip_id == trip_id).order_by(col(Plan.version).desc())
     ).first()
-    if not plan:
+    if previous:
+        plan, _ = clone_plan_for_edit(session, previous)
+    else:
         plan = Plan(
-            id=str(uuid.uuid4()),
             trip_id=trip.id,
             version=1,
-            validation_status=ValidationStatus.VALID,
-            notes=["Manual itinerary created by user."],
-            created_at=utc_now(),
+            validation_status=ValidationStatus.PARTIAL,
+            notes=["Manual itinerary created; validate the itinerary."],
         )
         session.add(plan)
-        session.commit()
-        session.refresh(plan)
-
         trip.status = TripStatus.PLANNED
         session.add(trip)
-        session.commit()
+        session.flush()
 
     # Anchor start_time and end_time to the actual trip day date
-    day_dates = build_day_dates(trip.start_date, trip.end_date)
-    if 0 <= req.day_index < len(day_dates):
-        target_date = day_dates[req.day_index]
-        item_start_time = datetime.combine(target_date, req.start_time.time())
-        item_end_time = datetime.combine(target_date, req.end_time.time())
-    else:
-        item_start_time = req.start_time
-        item_end_time = req.end_time
+    target_date = day_dates[req.day_index]
+    item_start_time = datetime.combine(target_date, req.start_time.time())
+    item_end_time = datetime.combine(target_date, req.end_time.time())
 
     # Resolve geographic coordinates (lat, lng)
     resolved_lat = req.lat
@@ -282,7 +327,7 @@ def add_plan_item(
 
     candidate_places = get_or_create_places_for_destination(session, trip.destination)
 
-    # If coordinates are missing (0.0 or None), resolve from destination catalog or city coordinates
+    # Only use coordinates verified from the request or an exact catalog match.
     if (
         not resolved_lat
         or not resolved_lng
@@ -290,11 +335,7 @@ def add_plan_item(
     ):
         norm_name = req.place_name.lower().strip()
         matched = next(
-            (
-                p
-                for p in candidate_places
-                if norm_name in p.name.lower() or p.name.lower() in norm_name
-            ),
+            (p for p in candidate_places if norm_name == p.name.lower().strip()),
             None,
         )
         if matched and matched.lat and matched.lng:
@@ -302,20 +343,9 @@ def add_plan_item(
             resolved_lng = matched.lng
             if not req.category or req.category == "attraction":
                 req.category = matched.category
-        elif candidate_places:
-            # Anchor near destination center with realistic spatial distribution
-            base_p = candidate_places[0]
-            existing_items = session.exec(
-                select(PlanItem).where(PlanItem.plan_id == plan.id)
-            ).all()
-            stop_num = len(existing_items) + 1
-            angle = (stop_num * 1.35) % (2 * math.pi)
-            dist = 0.008 + (stop_num % 4) * 0.004
-            resolved_lat = round(base_p.lat + math.sin(angle) * dist, 6)
-            resolved_lng = round(base_p.lng + math.cos(angle) * dist, 6)
         else:
-            resolved_lat = 38.7169
-            resolved_lng = -9.1399
+            resolved_lat = 0.0
+            resolved_lng = 0.0
 
     # Create or find place
     place_id = f"custom_{str(uuid.uuid4())[:8]}"
@@ -360,10 +390,12 @@ def update_plan_item(
     item_id: str,
     req: UpdatePlanItemRequest,
     session: Session = Depends(get_session),
+    access: TripAccess = Depends(require_trip_manager),
 ):
     """Directly edit an existing itinerary stop (Always allow all edits)."""
     item = session.get(PlanItem, item_id)
-    if not item:
+    item_plan = session.get(Plan, item.plan_id) if item else None
+    if not item or not item_plan or item_plan.trip_id != trip_id:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail={
@@ -372,12 +404,27 @@ def update_plan_item(
             },
         )
 
-    if req.day_index is not None and req.day_index < 0:
+    latest = session.exec(
+        select(Plan).where(Plan.trip_id == trip_id).order_by(col(Plan.version).desc())
+    ).first()
+    if latest is None or latest.id != item_plan.id:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "code": "STALE_PLAN_ITEM",
+                "message": "This stop belongs to an older plan. Reload the itinerary.",
+            },
+        )
+
+    trip = session.get(Trip, trip_id)
+    day_dates = build_day_dates(trip.start_date, trip.end_date) if trip else []
+    new_day_index = req.day_index if req.day_index is not None else item.day_index
+    if new_day_index < 0 or new_day_index >= len(day_dates):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail={
                 "code": "INVALID_DAY_INDEX",
-                "message": "day_index must be a non-negative integer.",
+                "message": "day_index must be within the trip dates.",
             },
         )
 
@@ -390,11 +437,12 @@ def update_plan_item(
             },
         )
 
-    if (
-        req.start_time is not None
-        and req.end_time is not None
-        and req.end_time <= req.start_time
-    ):
+    target_date = day_dates[new_day_index]
+    new_start = datetime.combine(
+        target_date, (req.start_time or item.start_time).time()
+    )
+    new_end = datetime.combine(target_date, (req.end_time or item.end_time).time())
+    if new_end <= new_start:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail={
@@ -403,29 +451,29 @@ def update_plan_item(
             },
         )
 
+    plan, copied_items = clone_plan_for_edit(session, latest)
+    item = copied_items[item_id]
     place = session.get(Place, item.place_id)
 
-    if req.day_index is not None:
-        item.day_index = req.day_index
-    if req.start_time is not None:
-        item.start_time = req.start_time
-    if req.end_time is not None:
-        item.end_time = req.end_time
+    item.day_index = new_day_index
+    item.start_time = new_start
+    item.end_time = new_end
     if req.cost is not None:
         item.cost = req.cost
-        if place:
-            place.est_cost = req.cost
-
-    if place:
-        if req.place_name is not None:
-            place.name = req.place_name
-        if req.category is not None:
-            place.category = req.category
-        if req.lat is not None:
-            place.lat = req.lat
-        if req.lng is not None:
-            place.lng = req.lng
+    if place and any(
+        value is not None for value in (req.place_name, req.category, req.lat, req.lng)
+    ):
+        place = Place(
+            place_id=f"custom_{uuid.uuid4().hex}",
+            name=req.place_name if req.place_name is not None else place.name,
+            category=req.category if req.category is not None else place.category,
+            lat=req.lat if req.lat is not None else place.lat,
+            lng=req.lng if req.lng is not None else place.lng,
+            est_cost=req.cost if req.cost is not None else place.est_cost,
+            opening_hours=place.opening_hours,
+        )
         session.add(place)
+        item.place_id = place.place_id
 
     session.add(item)
     session.commit()
@@ -449,10 +497,12 @@ def delete_plan_item(
     trip_id: str,
     item_id: str,
     session: Session = Depends(get_session),
+    access: TripAccess = Depends(require_trip_manager),
 ):
     """Remove a plan item from the itinerary."""
     item = session.get(PlanItem, item_id)
-    if not item:
+    item_plan = session.get(Plan, item.plan_id) if item else None
+    if not item or not item_plan or item_plan.trip_id != trip_id:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail={
@@ -460,7 +510,19 @@ def delete_plan_item(
                 "message": f"PlanItem '{item_id}' not found.",
             },
         )
-    session.delete(item)
+    latest = session.exec(
+        select(Plan).where(Plan.trip_id == trip_id).order_by(col(Plan.version).desc())
+    ).first()
+    if latest is None or latest.id != item_plan.id:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "code": "STALE_PLAN_ITEM",
+                "message": "This stop belongs to an older plan. Reload the itinerary.",
+            },
+        )
+    _, copied_items = clone_plan_for_edit(session, latest)
+    session.delete(copied_items[item_id])
     session.commit()
     return None
 
@@ -469,6 +531,7 @@ def delete_plan_item(
 def validate_current_plan(
     trip_id: str,
     session: Session = Depends(get_session),
+    access: TripAccess = Depends(get_trip_access),
 ):
     """
     Runs deterministic validators (budget, transit, operating hours) on the current plan.
@@ -488,7 +551,17 @@ def validate_current_plan(
         select(Plan).where(Plan.trip_id == trip_id).order_by(col(Plan.version).desc())
     ).first()
     if not plan:
-        return ValidationResult(is_valid=True, status=ValidationStatus.VALID, issues=[])
+        return ValidationResult(
+            is_valid=False,
+            status=ValidationStatus.PARTIAL,
+            issues=[
+                ValidationIssue(
+                    type="plan_missing",
+                    severity="error",
+                    message="No itinerary exists to validate.",
+                )
+            ],
+        )
 
     plan_resp = assemble_plan_response(session, trip, plan)
     constraints = session.exec(
@@ -501,12 +574,34 @@ def validate_current_plan(
     travel_issues = check_travel_time(plan_resp.days)
     hours_issues = check_open_hours(plan_resp.days)
 
-    all_issues = budget_issues + travel_issues + hours_issues
+    all_issues = (
+        budget_issues
+        + travel_issues
+        + hours_issues
+        + check_place_constraints(plan_resp.days, list(constraints))
+    )
     has_errors = any(i.severity == "error" for i in all_issues)
+    missing_constraints = len(
+        set(trip.member_ids or []) - {constraint.user_id for constraint in constraints}
+    )
+    if missing_constraints:
+        all_issues.append(
+            ValidationIssue(
+                type="missing_constraints",
+                severity="warning",
+                message=f"Preferences are missing for {missing_constraints} trip member(s).",
+            )
+        )
 
     return ValidationResult(
-        is_valid=not has_errors,
-        status=ValidationStatus.INVALID if has_errors else ValidationStatus.VALID,
+        is_valid=not has_errors and not missing_constraints,
+        status=(
+            ValidationStatus.INVALID
+            if has_errors
+            else ValidationStatus.PARTIAL
+            if missing_constraints
+            else ValidationStatus.VALID
+        ),
         issues=all_issues,
     )
 
@@ -516,6 +611,7 @@ def refine_plan(
     trip_id: str,
     req: RefinePlanRequest,
     session: Session = Depends(get_session),
+    access: TripAccess = Depends(require_trip_manager),
 ):
     """
     Apply natural-language refinement to the itinerary (e.g. 'Make Day 2 more relaxed').
@@ -559,7 +655,7 @@ def refine_plan(
             trip=trip,
             current_plan=plan,
             instruction=instruction,
-            user_id=req.user_id,
+            user_id=access.user_id,
         )
     except Exception as exc:
         logger.exception("Plan refinement failed for trip %s", trip_id)
@@ -577,6 +673,7 @@ def ask_agent(
     trip_id: str,
     req: AskAgentRequest,
     session: Session = Depends(get_session),
+    access: TripAccess = Depends(get_trip_access),
 ):
     """
     Ask the AI agent an open-ended question about the destination or itinerary,
@@ -642,7 +739,11 @@ def _fallback_ask_answer(
         )
 
     q = question.lower()
-    lines: list[str] = [f"Here is a quick guide for {trip.destination}:", ""]
+    lines: list[str] = [
+        f"Here is a quick guide for {trip.destination}:",
+        "Prices are estimates; confirm opening hours and availability with each venue.",
+        "",
+    ]
     seen_names: set[str] = set()
 
     def add_bullet(name: str, detail: str) -> None:
@@ -711,6 +812,10 @@ def _fallback_ask_answer(
     if any(w in q for w in POPULAR_WORDS) and not any(
         w in q for w in TEMPLE_WORDS + MUSEUM_WORDS
     ):
+        if "popular" in q or "best" in q or "top" in q:
+            lines.append(
+                "I do not have verified popularity rankings; listed options include:"
+            )
         attractions = [p for p in places if p.category not in FOOD_CATEGORIES]
         dining = [p for p in places if p.category in FOOD_CATEGORIES]
         for p in attractions[:4]:
@@ -718,7 +823,7 @@ def _fallback_ask_answer(
             add_bullet(p.name, f"{p.category}, {cost}")
         if dining:
             lines.append("")
-            lines.append("Best places to eat:")
+            lines.append("Dining options:")
             for p in dining[:3]:
                 cost_str = "Free" if p.est_cost == 0 else f"${p.est_cost:.0f}"
                 lines.append(f"- {p.name} — {cost_str}")
@@ -726,7 +831,7 @@ def _fallback_ask_answer(
     if any(w in q for w in FOOD_WORDS) and not any(w in q for w in POPULAR_WORDS):
         dining = [p for p in places if p.category in FOOD_CATEGORIES]
         if dining:
-            lines.append("Best places to eat:")
+            lines.append("Dining options:")
             for p in dining[:4]:
                 cost_str = "Free" if p.est_cost == 0 else f"${p.est_cost:.0f}"
                 add_bullet(p.name, f"{cost_str}")
@@ -739,8 +844,8 @@ def _fallback_ask_answer(
             label = "free" if p.est_cost == 0 else f"${p.est_cost:.0f}"
             add_bullet(p.name, label)
 
-    if len(lines) <= 2:
-        lines.append(f"Top venue to visit: {places[0].name} ({places[0].category}).")
+    if len(lines) <= 3:
+        lines.append(f"Listed venue: {places[0].name} ({places[0].category}).")
 
     return "\n".join(lines)
 
@@ -749,6 +854,7 @@ def _fallback_ask_answer(
 def export_plan_ics(
     trip_id: str,
     session: Session = Depends(get_session),
+    access: TripAccess = Depends(get_trip_access),
 ):
     """
     Export the current trip plan as an RFC 5545 iCalendar (.ics) file

@@ -31,6 +31,7 @@ from app.services.places_service import (
 )
 from app.validators.budget_validator import check_budget
 from app.validators.open_hours_validator import check_open_hours
+from app.validators.place_constraint_validator import check_place_constraints
 from app.validators.travel_validator import check_travel_time
 
 from .proposer import (
@@ -44,6 +45,15 @@ from .rebalancer import rebalance
 
 logger = logging.getLogger(__name__)
 
+
+class CandidatePlacesUnavailableError(Exception):
+    """No real venue candidates could be retrieved for the destination."""
+
+
+class UnsatisfiableExclusionsError(Exception):
+    """Every available venue conflicts with a group must-avoid rule."""
+
+
 # UUID pattern used to de-identify machine-generated validator messages
 _UUID_PATTERN = re.compile(
     r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}",
@@ -51,8 +61,11 @@ _UUID_PATTERN = re.compile(
 )
 
 
-def clean_issue_message(reason: str) -> str:
+def clean_issue_message(reason: str, user_ids: list[str] | None = None) -> str:
     """Strip machine identifiers from a validator issue for human-readable notes."""
+    for user_id in sorted(user_ids or [], key=len, reverse=True):
+        if user_id:
+            reason = reason.replace(user_id, "group member")
     return _UUID_PATTERN.sub("group member", reason)
 
 
@@ -79,10 +92,13 @@ class AgentPlanner:
         candidate_places = get_or_create_places_for_destination(
             session, trip.destination
         )
+        if not candidate_places:
+            raise CandidatePlacesUnavailableError(trip.destination)
 
         # Aggregate constraints
         must_avoids = set()
         must_sees = []
+        user_ids = [c.user_id for c in constraints]
         for c in constraints:
             for avoid in c.must_avoid:
                 must_avoids.add(avoid.lower().strip())
@@ -99,10 +115,13 @@ class AgentPlanner:
             )
         ]
         if not usable_places:
-            usable_places = candidate_places
+            raise UnsatisfiableExclusionsError(trip.destination)
 
         # 2. Iterative Propose-Validate Loop
-        notes: list[str] = []
+        notes: list[str] = [
+            "Venue prices are estimates; check current admission, dining prices, "
+            "and opening hours with each venue before visiting."
+        ]
         feedback_history: list[str] = []
         best_days: list[PlanDayResponse] = []
         best_issues_count = 9999
@@ -148,14 +167,21 @@ class AgentPlanner:
             travel_issues = check_travel_time(proposed_days)
             hours_issues = check_open_hours(proposed_days)
 
-            all_issues = budget_issues + travel_issues + hours_issues
+            all_issues = (
+                budget_issues
+                + travel_issues
+                + hours_issues
+                + check_place_constraints(proposed_days, constraints)
+            )
             error_issues = [i for i in all_issues if i.severity == "error"]
+            empty_days = [day.day_index + 1 for day in proposed_days if not day.items]
+            issue_count = len(error_issues) + len(empty_days)
 
-            if len(error_issues) < best_issues_count:
-                best_issues_count = len(error_issues)
+            if issue_count < best_issues_count:
+                best_issues_count = issue_count
                 best_days = proposed_days
 
-            if not error_issues:
+            if not error_issues and not empty_days:
                 notes.append(
                     f"Iteration {iteration}: All deterministic validations passed strictly "
                     f"({len(budget_issues)} budget warnings, {len(travel_issues)} travel warnings)."
@@ -165,13 +191,16 @@ class AgentPlanner:
 
             # Feedback to self-correct in next iteration
             reasons = [f"[{i.type}] {i.message}" for i in error_issues[:3]]
-            feedback_history.extend(clean_issue_message(r) for r in reasons)
+            reasons.extend(
+                f"Day {day} has no scheduled venues." for day in empty_days[:3]
+            )
+            feedback_history.extend(clean_issue_message(r, user_ids) for r in reasons)
             notes.append(
                 f"Iteration {iteration}: Validators rejected candidate itinerary with "
                 f"{len(reasons)} issue(s). Repairing next iteration..."
             )
             for reason in reasons:
-                notes.append(f"  - {clean_issue_message(reason)}")
+                notes.append(f"  - {clean_issue_message(reason, user_ids)}")
             replacement_attempts += 1
 
         # 3. Fallback / Constraint Relaxation if max iterations reached (spec Section 9.2)
@@ -192,9 +221,8 @@ class AgentPlanner:
                 replacement_attempts=replacement_attempts,
             )
             relaxed_days = enforce_schedule_uniqueness(relaxed_days, usable_places)
-            relaxed_errors = [
-                i
-                for i in check_budget(
+            relaxed_issues = (
+                check_budget(
                     relaxed_days,
                     constraints,
                     budget_tolerance,
@@ -202,22 +230,60 @@ class AgentPlanner:
                 )
                 + check_travel_time(relaxed_days)
                 + check_open_hours(relaxed_days)
+                + check_place_constraints(relaxed_days, constraints)
+            )
+            relaxed_errors = [
+                i for i in relaxed_issues if i.severity == "error" or i.type == "budget"
+            ]
+            relaxed_empty_days = [day for day in relaxed_days if not day.items]
+            relaxed_issue_count = len(relaxed_errors) + len(relaxed_empty_days)
+            if relaxed_issue_count < best_issues_count:
+                best_days = relaxed_days
+                best_issues_count = relaxed_issue_count
+            # The saved plan must satisfy the original constraints to be VALID.
+            # A candidate that only passes after budget relaxation is partial.
+            strict_final_errors = [
+                i
+                for i in check_budget(
+                    best_days, constraints, num_members=len(constraints)
+                )
+                + check_travel_time(best_days)
+                + check_open_hours(best_days)
+                + check_place_constraints(best_days, constraints)
                 if i.severity == "error"
             ]
-            if len(relaxed_errors) < best_issues_count:
-                best_days = relaxed_days
-            # Only mark PARTIAL if errors remain after relaxation; otherwise the plan is VALID
+            strict_issue_count = len(strict_final_errors) + sum(
+                not day.items for day in best_days
+            )
             status = (
                 ValidationStatus.VALID
-                if not relaxed_errors
+                if strict_issue_count == 0
                 else ValidationStatus.PARTIAL
             )
             notes.append(
-                f"Reached maximum iterations ({cls.MAX_ITERATIONS}). Applied Section 9.2 Constraint Relaxation: "
-                "Relaxed daily budget cap by 15% to preserve must-see attractions without dropping key venues."
+                f"Reached maximum iterations ({cls.MAX_ITERATIONS}). Tried a 15% daily "
+                "budget relaxation; retained the candidate with the fewest unresolved "
+                "validation or empty-day issues."
             )
+            if status == ValidationStatus.PARTIAL:
+                notes.append(
+                    f"This itinerary still has {strict_issue_count} unresolved issue(s) "
+                    "against the original constraints; "
+                    "review the schedule before relying on it."
+                )
 
         # 4. Persist Plan & PlanItems in Database
+        missing_constraints = len(
+            set(trip.member_ids or [])
+            - {constraint.user_id for constraint in constraints}
+        )
+        if missing_constraints:
+            status = ValidationStatus.PARTIAL
+            notes.append(
+                f"Preferences are still missing for {missing_constraints} trip member(s); "
+                "this itinerary does not reflect the whole group."
+            )
+
         existing_plans = session.exec(
             select(Plan)
             .where(Plan.trip_id == trip.id)
@@ -234,8 +300,7 @@ class AgentPlanner:
             created_at=utc_now(),
         )
         session.add(new_plan)
-        session.commit()
-        session.refresh(new_plan)
+        session.flush()
 
         # Persist items
         persisted_days: list[PlanDayResponse] = []
@@ -272,6 +337,7 @@ class AgentPlanner:
             )
 
         session.commit()
+        session.refresh(new_plan)
         return create_plan_response(new_plan, persisted_days)
 
     @classmethod
@@ -311,6 +377,20 @@ class AgentPlanner:
         candidate_places = get_or_create_places_for_destination(
             session, trip.destination
         )
+        must_avoids = [
+            term.strip().lower()
+            for constraint in constraints
+            for term in constraint.must_avoid
+            if term.strip()
+        ]
+        candidate_places = [
+            place
+            for place in candidate_places
+            if not any(
+                term in place.name.lower() or term in place.category.lower()
+                for term in must_avoids
+            )
+        ]
 
         notes = list(current_plan.notes or [])
         notes.append(f"Refinement requested by user: '{instruction}'")
@@ -402,11 +482,14 @@ class AgentPlanner:
                                 destination=trip.destination,
                                 max_cost=30.0 if "30" in inst_lower else 40.0,
                                 excluded_place_ids=list(allocated_ids | {it.place_id}),
+                                forbidden_terms=must_avoids,
                             )
                             chosen = alt if alt else p_obj
                             allocated_ids.add(chosen.place_id)
                             notes.append(
-                                f"Day {d_idx + 1}: Adjusted dining venue to '{chosen.name}' (${chosen.est_cost:.2f}) to fulfill dietary/cost preference."
+                                f"Day {d_idx + 1}: Changed dining venue to '{chosen.name}' "
+                                f"(${chosen.est_cost:.2f}) in response to the request; "
+                                "confirm dietary suitability with the venue."
                             )
                             new_day_items.append(
                                 PlanItemResponse(
@@ -629,13 +712,20 @@ class AgentPlanner:
         )
         travel_issues = check_travel_time(refined_days)
         hours_issues = check_open_hours(refined_days)
-        all_issues = budget_issues + travel_issues + hours_issues
+        all_issues = (
+            budget_issues
+            + travel_issues
+            + hours_issues
+            + check_place_constraints(refined_days, list(constraints))
+        )
         has_hard_errors = any(
-            i.severity == "error" and i.type in ("travel_time", "open_hours")
+            i.severity == "error"
+            and i.type in ("travel_time", "open_hours", "must_avoid")
             for i in all_issues
         )
         has_budget_errors = any(
-            i.severity == "error" and i.type == "budget" for i in all_issues
+            i.severity == "error" and i.type in ("budget", "must_see")
+            for i in all_issues
         )
         # Budget-only violations are PARTIAL (same as the main planner's relaxation
         # path). Hard scheduling conflicts (travel time, open hours) are INVALID.
@@ -645,6 +735,15 @@ class AgentPlanner:
             v_status = ValidationStatus.PARTIAL
         else:
             v_status = ValidationStatus.VALID
+        missing_constraints = len(
+            set(trip.member_ids or [])
+            - {constraint.user_id for constraint in constraints}
+        )
+        if missing_constraints and v_status == ValidationStatus.VALID:
+            v_status = ValidationStatus.PARTIAL
+            notes.append(
+                f"Preferences are still missing for {missing_constraints} trip member(s)."
+            )
 
         new_plan = Plan(
             id=str(uuid.uuid4()),
@@ -655,8 +754,7 @@ class AgentPlanner:
             created_at=utc_now(),
         )
         session.add(new_plan)
-        session.commit()
-        session.refresh(new_plan)
+        session.flush()
 
         persisted_days: list[PlanDayResponse] = []
         for d in refined_days:
@@ -692,6 +790,7 @@ class AgentPlanner:
             )
 
         session.commit()
+        session.refresh(new_plan)
         return create_plan_response(new_plan, persisted_days)
 
     @classmethod

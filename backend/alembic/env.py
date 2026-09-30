@@ -15,7 +15,7 @@ if config.config_file_name is not None:
     fileConfig(config.config_file_name)
 
 from sqlmodel import SQLModel
-from app.models.schema import Trip, Constraint, Place, Plan, PlanItem, Expense, User  # noqa: F401
+from app.models.schema import Trip, TripMember, Constraint, Place, Plan, PlanItem, Expense, User  # noqa: F401
 from app.core.config import settings
 
 target_metadata = SQLModel.metadata

@@ -17,9 +17,7 @@ from app.core.security import (
 from app.models.schema import (
     AuthResponse,
     LoginRequest,
-    Place,
     Plan,
-    PlanItem,
     Trip,
     TripStatus,
     User,
@@ -115,53 +113,35 @@ def get_admin_overview(
     creators_count = len(users)
 
     plans = session.exec(select(Plan)).all()
-    # Each Plan record represents one agent generation run.
-    # Summing versions inflates the count (a v5 plan would count as 5 calls).
-    llm_calls = len(plans)
-    total_spend = round(llm_calls * 0.05, 2)
-
-    # Calculate a rough success rate based on invalid plans
-    invalid_plans = sum(1 for p in plans if p.validation_status.value == "invalid")
-    total_plans_generated = len(plans)
-    success_rate = (
-        100
-        if total_plans_generated == 0
-        else round(100 - (invalid_plans / total_plans_generated * 100))
-    )
-
-    # Cache hit rate estimate (mock dynamic)
-    places_count = len(session.exec(select(Place)).all())
-    cache_hit_rate = 100 if places_count == 0 else min(95, 40 + (places_count * 2))
+    valid_plans = sum(1 for plan in plans if plan.validation_status.value == "valid")
 
     return {
         "metrics": [
             {
                 "label": "Active trips",
                 "value": str(len(active_trips)),
-                "sub": f"+{max(1, len(active_trips))} this week",
+                "sub": "Trips that are not completed",
             },
             {
-                "label": "Registered creators",
+                "label": "Registered users",
                 "value": str(creators_count),
                 "sub": f"{creators_count} accounts on platform",
             },
             {
-                "label": "Agent success rate",
-                "value": f"{success_rate}%",
-                "sub": "valid on first pass, 30-day avg",
+                "label": "Valid saved plans",
+                "value": str(valid_plans),
+                "sub": "Current validation status of saved versions",
             },
             {
-                "label": "API spend, month to date",
-                "value": f"${total_spend:.2f}",
-                "sub": "of $10.00 allocated budget",
+                "label": "Saved plan versions",
+                "value": str(len(plans)),
+                "sub": "Includes manual edits and rebalances",
             },
         ],
         "summary": {
             "total_trips": len(trips),
             "active_trips": len(active_trips),
             "total_users": creators_count,
-            "api_spend": total_spend,
-            "cache_hit_rate": f"{cache_hit_rate}%",
         },
     }
 
@@ -257,7 +237,7 @@ def delete_trip_admin(
     admin: User = Depends(get_current_admin_user),
 ) -> dict[str, str]:
     """Administrative force deletion of a trip with full cascade."""
-    from app.models.schema import Constraint, Expense, PlanItem
+    from app.models.schema import Constraint, Expense, PlanItem, TripMember
 
     trip = session.get(Trip, trip_id)
     if not trip:
@@ -290,6 +270,12 @@ def delete_trip_admin(
     ).all()
     for e in expenses_to_delete:
         session.delete(e)
+
+    members_to_delete = session.exec(
+        select(TripMember).where(TripMember.trip_id == trip_id)
+    ).all()
+    for member in members_to_delete:
+        session.delete(member)
 
     session.delete(trip)
     session.commit()
@@ -327,42 +313,8 @@ def get_api_usage(
     session: Session = Depends(get_session),
     admin: User = Depends(get_current_admin_user),
 ):
-    """External API consumption and quota tracking."""
-    places_count = len(session.exec(select(Place)).all())
-    # Estimate distance matrix calls: roughly proportional to plan items
-    plan_items_count = len(session.exec(select(PlanItem)).all())
-    distance_calls = max(0, plan_items_count * 2)
-
-    # Estimate LLM calls: one call per plan generation run
-    plans = session.exec(select(Plan)).all()
-    llm_calls = len(plans)
-
-    # Calculate costs
-    llm_cost = round(llm_calls * 0.05, 2)  # Assume $0.05 per LLM generation
-
-    return [
-        ApiUsageItem(
-            name="Google Places API",
-            used=places_count,
-            freeLimit=10000,
-            cost=0.0,
-            category="places",
-        ),
-        ApiUsageItem(
-            name="Distance Matrix API",
-            used=distance_calls,
-            freeLimit=2500,
-            cost=0.0,
-            category="distance",
-        ),
-        ApiUsageItem(
-            name="LLM (Gemini 2.5 Flash)",
-            used=llm_calls,
-            freeLimit=1500,
-            cost=llm_cost,
-            category="llm",
-        ),
-    ]
+    """Return recorded API usage; no usage collector is configured yet."""
+    return []
 
 
 @router.get("/system-health", response_model=list[SystemHealthNode])
@@ -370,7 +322,7 @@ def get_system_health(
     session: Session = Depends(get_session),
     admin: User = Depends(get_current_admin_user),
 ) -> list[SystemHealthNode]:
-    """Live system diagnostics — probes DB and Redis; Nginx/LLM are inferred."""
+    """Live system diagnostics for services directly probed by this endpoint."""
     import os
     import time
 
@@ -385,16 +337,16 @@ def get_system_health(
             SystemHealthNode(
                 name="Postgres / SQLite Database",
                 status="up",
-                detail=f"{db_latency_ms}ms query latency · Connection pool healthy",
+                detail=f"{db_latency_ms}ms query latency",
                 latency_ms=db_latency_ms,
             )
         )
-    except Exception as exc:
+    except Exception:
         results.append(
             SystemHealthNode(
                 name="Postgres / SQLite Database",
                 status="down",
-                detail=f"Database unreachable: {exc}",
+                detail="Database query failed",
                 latency_ms=None,
             )
         )
@@ -417,12 +369,12 @@ def get_system_health(
                     latency_ms=redis_latency_ms,
                 )
             )
-        except Exception as exc:
+        except Exception:
             results.append(
                 SystemHealthNode(
                     name="Redis Cache",
                     status="down",
-                    detail=f"Redis unreachable: {exc}",
+                    detail="Redis PING failed",
                     latency_ms=None,
                 )
             )
@@ -432,38 +384,6 @@ def get_system_health(
                 name="Redis Cache",
                 status="degraded",
                 detail="REDIS_URL not configured — cache layer disabled",
-                latency_ms=None,
-            )
-        )
-
-    # 3. Nginx/Gateway — inferred (no direct probe available from backend)
-    results.append(
-        SystemHealthNode(
-            name="Nginx Gateway",
-            status="up",
-            detail="Inferred healthy (request reached backend)",
-            latency_ms=None,
-        )
-    )
-
-    # 4. Gemini LLM — inferred from settings
-    from app.core.config import settings as cfg
-
-    if cfg.GEMINI_API_KEY:
-        results.append(
-            SystemHealthNode(
-                name="Gemini LLM Service",
-                status="up",
-                detail=f"API key configured · model {cfg.LLM_MODEL_NAME}",
-                latency_ms=None,
-            )
-        )
-    else:
-        results.append(
-            SystemHealthNode(
-                name="Gemini LLM Service",
-                status="degraded",
-                detail="GEMINI_API_KEY not set — heuristic fallback active",
                 latency_ms=None,
             )
         )

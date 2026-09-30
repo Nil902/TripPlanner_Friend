@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { X, Users, ArrowRight, CheckCircle2 } from 'lucide-react';
 import { BORDER, INK, MUTED, PINE, SERIF } from '../lib/constants';
 import { PrimaryButton, SecondaryButton } from './Button';
@@ -7,7 +7,7 @@ export interface JoinModalProps {
   isOpen: boolean;
   onClose: () => void;
   initialCode?: string;
-  onJoin: (member: { id: string; name: string; initials: string; tripId: string }) => void;
+  onJoin: (member: { name: string; initials: string; tripId: string }) => Promise<void>;
 }
 
 export default function JoinModal({
@@ -19,10 +19,15 @@ export default function JoinModal({
   const [code, setCode] = useState(initialCode);
   const [name, setName] = useState('');
   const [error, setError] = useState<string | null>(null);
+  const [isJoining, setIsJoining] = useState(false);
+
+  useEffect(() => {
+    if (isOpen) setCode(initialCode);
+  }, [isOpen, initialCode]);
 
   if (!isOpen) return null;
 
-  const handleJoin = (e: React.FormEvent) => {
+  const handleJoin = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!name.trim()) {
       setError('Please enter your name.');
@@ -37,16 +42,21 @@ export default function JoinModal({
       .toUpperCase()
       .slice(0, 2) || cleanName.slice(0, 2).toUpperCase();
 
-    const memberId = cleanName.toLowerCase().replace(/\s+/g, '_');
-    const tripId = code.trim() || 'trip-lisbon-202';
-
-    onJoin({
-      id: memberId,
-      name: cleanName,
-      initials,
-      tripId,
-    });
-    onClose();
+    const tripId = code.trim();
+    if (!tripId) {
+      setError('Enter a trip code or invitation link.');
+      return;
+    }
+    setIsJoining(true);
+    setError(null);
+    try {
+      await onJoin({ name: cleanName, initials, tripId });
+      onClose();
+    } catch (error) {
+      setError(error instanceof Error ? error.message : 'Unable to join this trip.');
+    } finally {
+      setIsJoining(false);
+    }
   };
 
   return (
@@ -239,8 +249,8 @@ export default function JoinModal({
             <SecondaryButton type="button" onClick={onClose}>
               Cancel
             </SecondaryButton>
-            <PrimaryButton type="submit">
-              Enter Trip Room <ArrowRight size={16} />
+            <PrimaryButton type="submit" disabled={isJoining}>
+              {isJoining ? 'Joining…' : 'Enter Trip Room'} <ArrowRight size={16} />
             </PrimaryButton>
           </div>
         </form>

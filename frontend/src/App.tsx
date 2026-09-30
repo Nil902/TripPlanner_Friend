@@ -192,41 +192,17 @@ export default function App() {
             // 2. Check for saved guest session
             const guest = getGuestSession();
             if (guest && guest.tripId && guest.memberId && mounted) {
-              setCurrentUser({
-                id: guest.memberId,
-                name: guest.name,
-                role: 'joiner',
-              });
-
-              // Set initial active trip immediately so tripSessionMiddleware doesn't kick user to welcome
-              setActiveTrip({
-                id: guest.tripId,
-                title: formatTripTitle(guest.tripId),
-                destination: formatDestination(guest.tripId),
-                start_date: '2026-06-12',
-                end_date: '2026-06-14',
-                creator_id: 'creator',
-                status: 'collecting_constraints',
-                member_ids: [guest.memberId],
-              });
-
-              setScreen('room');
-              setActive('overview');
-
-              // Load members from backend for this trip
               try {
-                const memList = await api.trips.getMembers(guest.tripId);
-                if (Array.isArray(memList) && memList.length > 0 && mounted) {
-                  setMembers(memList);
-                }
-              } catch {
-                // ignore
-              }
-
-              // Fetch real trip details from backend API
-              try {
-                const t = await api.trips.get(guest.tripId);
+                const [t, memList] = await Promise.all([
+                  api.trips.get(guest.tripId),
+                  api.trips.getMembers(guest.tripId),
+                ]);
                 if (t?.id && mounted) {
+                  setCurrentUser({
+                    id: guest.memberId,
+                    name: guest.name,
+                    role: 'joiner',
+                  });
                   setActiveTrip({
                     id: t.id,
                     title: t.title,
@@ -237,9 +213,13 @@ export default function App() {
                     status: t.status as TripSummary['status'],
                     member_ids: t.member_ids || [],
                   });
+                  setMembers(memList);
+                  setScreen('room');
+                  setActive('overview');
                 }
               } catch {
-                // ignore
+                setGuestSession(null);
+                if (mounted) setScreen('welcome');
               }
             }
           }
@@ -248,8 +228,16 @@ export default function App() {
           // This handles creator refresh or direct URL access
           if (parsed.tripId && (parsed.screen === 'room' || parsed.screen === 'owner')) {
             try {
-              const t = await api.trips.get(parsed.tripId);
+              const [t, permissions] = await Promise.all([
+                api.trips.get(parsed.tripId),
+                api.trips.getPermissions(parsed.tripId),
+              ]);
               if (t?.id && mounted) {
+                setCurrentUser((user) =>
+                  user
+                    ? { ...user, role: permissions.can_manage ? 'creator' : 'joiner' }
+                    : user,
+                );
                 setActiveTrip({
                   id: t.id,
                   title: t.title,
@@ -376,91 +364,50 @@ export default function App() {
   }, [currentUser?.role, currentUser?.id]);
 
   // Handle public guest joining via code (no login required)
-  const handleJoinGuest = (member: {
-    id: string;
+  const handleJoinGuest = async (member: {
     name: string;
     initials: string;
     tripId: string;
-  }) => {
-    const guestUser: CurrentUser = {
-      id: member.id,
-      name: member.name,
-      role: 'joiner',
-    };
-    setCurrentUser(guestUser);
+  }): Promise<void> => {
+    const joined = await api.trips.join(member.tripId, { name: member.name });
+    if (joined.access_token) {
+      setGuestSession({
+        tripId: member.tripId,
+        memberId: joined.id,
+        name: joined.name,
+        initials: joined.initials,
+        accessToken: joined.access_token,
+      });
+    } else if (!getAuthToken()) {
+      throw new Error('The trip did not issue a usable session. Please try again.');
+    }
 
-    // Save session in localStorage so closing the browser remembers them
-    setGuestSession({
-      tripId: member.tripId,
-      memberId: member.id,
-      name: member.name,
-      initials: member.initials,
+    let fetchedTrip: Awaited<ReturnType<typeof api.trips.get>>;
+    let fetchedMembers: Awaited<ReturnType<typeof api.trips.getMembers>>;
+    try {
+      [fetchedTrip, fetchedMembers] = await Promise.all([
+        api.trips.get(member.tripId),
+        api.trips.getMembers(member.tripId),
+      ]);
+    } catch (err) {
+      if (joined.access_token) setGuestSession(null);
+      throw err;
+    }
+
+    setCurrentUser({ id: joined.id, name: joined.name, role: joined.role });
+    setActiveTrip({
+      id: fetchedTrip.id,
+      title: fetchedTrip.title,
+      destination: fetchedTrip.destination,
+      start_date: String(fetchedTrip.start_date),
+      end_date: String(fetchedTrip.end_date),
+      creator_id: fetchedTrip.creator_id,
+      status: fetchedTrip.status as TripSummary['status'],
+      member_ids: fetchedTrip.member_ids || [],
     });
-
-    // Optimistically set active trip immediately so room screen can render
-    const found = trips.find((t) => t.id === member.tripId);
-    setActiveTrip(
-      found || {
-        id: member.tripId,
-        title: formatTripTitle(member.tripId),
-        destination: formatDestination(member.tripId),
-        start_date: '2026-06-12',
-        end_date: '2026-06-14',
-        creator_id: 'creator',
-        status: 'collecting_constraints',
-        member_ids: [member.id],
-      },
-    );
-
-    // Optimistically add member
-    setMembers((prev) => {
-      if (prev.some((m) => m.id === member.id)) return prev;
-      return [
-        ...prev,
-        {
-          id: member.id,
-          name: member.name,
-          initials: member.initials,
-          submitted: false,
-          role: 'joiner',
-        },
-      ];
-    });
-
-    // Immediately enter the room
+    setMembers(fetchedMembers);
     setScreen('room');
     setActive('overview');
-
-    // Sync with backend API in the background
-    void api.trips
-      .join(member.tripId, {
-        name: member.name,
-        user_id: member.id,
-      })
-      .then(async () => {
-        const [fetchedTrip, fetchedMembers] = await Promise.all([
-          api.trips.get(member.tripId).catch(() => null),
-          api.trips.getMembers(member.tripId).catch(() => null),
-        ]);
-
-        if (fetchedTrip?.id) {
-          setActiveTrip({
-            id: fetchedTrip.id,
-            title: fetchedTrip.title,
-            destination: fetchedTrip.destination,
-            start_date: String(fetchedTrip.start_date),
-            end_date: String(fetchedTrip.end_date),
-            creator_id: fetchedTrip.creator_id,
-            status: fetchedTrip.status as TripSummary['status'],
-            member_ids: fetchedTrip.member_ids || [],
-          });
-        }
-
-        if (Array.isArray(fetchedMembers) && fetchedMembers.length > 0) {
-          setMembers(fetchedMembers);
-        }
-      })
-      .catch(() => {});
   };
 
   // Handle creator signup or login
@@ -544,6 +491,14 @@ export default function App() {
               onRequireLogin={() => setScreen('auth')}
               trips={trips}
               onSelectTrip={(trip) => {
+                setCurrentUser((user) =>
+                  user
+                    ? {
+                        ...user,
+                        role: trip.creator_id === user.id ? 'creator' : 'joiner',
+                      }
+                    : user,
+                );
                 setActiveTrip(trip);
                 setScreen('room');
                 setActive('overview');
@@ -756,7 +711,10 @@ export default function App() {
                     : undefined
                 }
                 onExitRoom={() => {
-                  if (currentUser?.role === 'creator') {
+                  if (getAuthToken()) {
+                    setCurrentUser((user) =>
+                      user ? { ...user, role: 'creator' } : user,
+                    );
                     setScreen('dashboard');
                   } else {
                     setGuestSession(null);
@@ -783,7 +741,10 @@ export default function App() {
                 }
                 onExitRoom={() => {
                   setIsMobileNavOpen(false);
-                  if (currentUser?.role === 'creator') {
+                  if (getAuthToken()) {
+                    setCurrentUser((user) =>
+                      user ? { ...user, role: 'creator' } : user,
+                    );
                     setScreen('dashboard');
                   } else {
                     setGuestSession(null);

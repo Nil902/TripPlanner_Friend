@@ -80,6 +80,16 @@ class Trip(SQLModel, table=True):
     created_at: datetime = Field(default_factory=utc_now)
 
 
+class TripMember(SQLModel, table=True):
+    """Display name supplied when a member joins a trip."""
+
+    __tablename__ = "trip_members"
+
+    trip_id: str = Field(foreign_key="trips.id", primary_key=True)
+    user_id: str = Field(primary_key=True)
+    name: str = Field()
+
+
 class Constraint(SQLModel, table=True):
     __tablename__ = "constraints"
 
@@ -217,6 +227,10 @@ class MemberResponse(BaseModel):
     role: str = "joiner"
 
     model_config = {"from_attributes": True}
+
+
+class JoinTripResponse(MemberResponse):
+    access_token: str | None = None
 
 
 class JoinTripRequest(BaseModel):

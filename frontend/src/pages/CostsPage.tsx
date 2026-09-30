@@ -84,18 +84,15 @@ export default function CostsPage({
   };
 
   const handleAddExpense = async (expense: ExpenseItem) => {
-    try {
-      await api.expenses.create(tripId, {
-        paid_by: expense.paidBy,
-        amount: expense.amount,
-        description: expense.desc,
-        category: expense.category || 'activity',
-        split_between: expense.splitBetween || members.map((m) => m.id),
-      });
-      loadExpenses();
-    } catch {
-      setExpenses((prev) => [...prev, expense]);
-    }
+    await api.expenses.create(tripId, {
+      paid_by: expense.paidBy,
+      amount: expense.amount,
+      description: expense.desc,
+      category: expense.category || 'activity',
+      split_between: expense.splitBetween || members.map((m) => m.id),
+    });
+    loadExpenses();
+    loadSettleUp();
   };
 
   return (

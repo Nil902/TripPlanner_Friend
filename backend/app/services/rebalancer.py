@@ -25,6 +25,7 @@ from app.models.schema import (
 from app.services.places_service import find_alternative_place
 from app.validators.budget_validator import check_budget
 from app.validators.open_hours_validator import check_open_hours
+from app.validators.place_constraint_validator import check_place_constraints
 from app.validators.travel_validator import check_travel_time
 
 from .proposer import build_day_dates, create_plan_response
@@ -46,6 +47,15 @@ def rebalance(
     ).all()
 
     day_dates = build_day_dates(trip.start_date, trip.end_date)
+    constraints = list(
+        session.exec(select(Constraint).where(Constraint.trip_id == trip.id)).all()
+    )
+    must_avoids = [
+        term
+        for constraint in constraints
+        for term in constraint.must_avoid
+        if term.strip()
+    ]
 
     notes = list(current_plan.notes or [])
     notes.append(
@@ -57,6 +67,7 @@ def rebalance(
     # Determine the final validation_status before the first DB commit to avoid
     # leaving a phantom VALID plan row if an error occurs mid-rebalance (Bug #1 fix).
     staged_days: list[tuple[PlanDayResponse, list[dict]]] = []
+    missing_replacement = False
 
     for d_idx, d_date in enumerate(day_dates):
         items_for_day = [it for it in existing_items if it.day_index == d_idx]
@@ -115,11 +126,17 @@ def rebalance(
                         destination=trip.destination,
                         max_cost=it.cost + 10.0,
                         excluded_place_ids=list(excluded),
+                        forbidden_terms=must_avoids,
                     )
-                    target_place = alt if alt else place
-                    notes.append(
-                        f"Substituted '{place.name}' with alternative '{target_place.name}'."
-                    )
+                    if alt is None:
+                        missing_replacement = True
+                        notes.append(
+                            f"Removed closed venue '{place.name}' from Day {d_idx + 1}; "
+                            "no suitable replacement was available."
+                        )
+                        continue
+                    target_place = alt
+                    notes.append(f"Substituted '{place.name}' with '{alt.name}'.")
                     start_t = it.start_time
                     end_t = it.end_time
                 elif disruption.type == DisruptionType.FLIGHT_DELAYED:
@@ -177,17 +194,32 @@ def rebalance(
     # ── Phase 2: Validate BEFORE persisting ──────────────────────────────────
     # This ensures the correct status is stored on first (and only) commit.
     persisted_days = [sd for sd, _ in staged_days]
-    constraints = list(
-        session.exec(select(Constraint).where(Constraint.trip_id == trip.id)).all()
-    )
     budget_issues = check_budget(
         persisted_days, constraints, num_members=len(constraints)
     )
     travel_issues = check_travel_time(persisted_days)
     hours_issues = check_open_hours(persisted_days)
-    all_issues = budget_issues + travel_issues + hours_issues
+    all_issues = (
+        budget_issues
+        + travel_issues
+        + hours_issues
+        + check_place_constraints(persisted_days, constraints)
+    )
     has_errors = any(i.severity == "error" for i in all_issues)
-    final_status = ValidationStatus.INVALID if has_errors else ValidationStatus.VALID
+    if has_errors:
+        final_status = ValidationStatus.INVALID
+    elif missing_replacement or any(not day.items for day in persisted_days):
+        final_status = ValidationStatus.PARTIAL
+    else:
+        final_status = ValidationStatus.VALID
+    missing_constraints = len(
+        set(trip.member_ids or []) - {constraint.user_id for constraint in constraints}
+    )
+    if missing_constraints and final_status == ValidationStatus.VALID:
+        final_status = ValidationStatus.PARTIAL
+        notes.append(
+            f"Preferences are still missing for {missing_constraints} trip member(s)."
+        )
 
     # ── Phase 3: Atomic persist — Plan + PlanItems in one commit ─────────────
     new_plan = Plan(

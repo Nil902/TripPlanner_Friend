@@ -9,6 +9,7 @@ from httpx import ASGITransport, AsyncClient
 
 from app.main import app
 from app.services import proposer
+from tests.support import register_creator
 
 
 @pytest.mark.asyncio
@@ -17,6 +18,7 @@ async def test_ask_agent_returns_fallback_recommendation(monkeypatch):
     monkeypatch.setattr(proposer.settings, "GEMINI_API_KEY", "")
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as client:
+        creator_id = await register_creator(client)
         trip_res = await client.post(
             "/api/v1/trips",
             json={
@@ -24,7 +26,7 @@ async def test_ask_agent_returns_fallback_recommendation(monkeypatch):
                 "destination": "Lisbon, Portugal",
                 "start_date": "2026-10-01",
                 "end_date": "2026-10-03",
-                "creator_id": "creator_1",
+                "creator_id": creator_id,
             },
         )
         assert trip_res.status_code == 201
@@ -47,6 +49,7 @@ async def test_ask_agent_empty_question_rejected(monkeypatch):
     monkeypatch.setattr(proposer.settings, "GEMINI_API_KEY", "")
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as client:
+        creator_id = await register_creator(client)
         trip_res = await client.post(
             "/api/v1/trips",
             json={
@@ -54,7 +57,7 @@ async def test_ask_agent_empty_question_rejected(monkeypatch):
                 "destination": "Lisbon, Portugal",
                 "start_date": "2026-10-01",
                 "end_date": "2026-10-03",
-                "creator_id": "creator_1",
+                "creator_id": creator_id,
             },
         )
         trip_id = trip_res.json()["id"]
@@ -84,6 +87,7 @@ async def test_ask_agent_siem_reap_recommends_temples(monkeypatch):
     monkeypatch.setattr(proposer.settings, "GEMINI_API_KEY", "")
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as client:
+        creator_id = await register_creator(client)
         trip_res = await client.post(
             "/api/v1/trips",
             json={
@@ -91,7 +95,7 @@ async def test_ask_agent_siem_reap_recommends_temples(monkeypatch):
                 "destination": "Siem Reap",
                 "start_date": "2026-11-01",
                 "end_date": "2026-11-04",
-                "creator_id": "creator_sr",
+                "creator_id": creator_id,
             },
         )
         assert trip_res.status_code == 201
@@ -101,7 +105,7 @@ async def test_ask_agent_siem_reap_recommends_temples(monkeypatch):
         await client.post(
             f"/api/v1/trips/{trip_id}/constraints",
             json={
-                "user_id": "creator_sr",
+                "user_id": creator_id,
                 "budget_per_day": 80.0,
                 "must_see": ["Angkor Wat"],
                 "must_avoid": [],

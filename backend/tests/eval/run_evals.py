@@ -479,5 +479,8 @@ if __name__ == "__main__":
         print("Evaluation benchmark FAILED: Agent pass rate below 90% threshold.")
         sys.exit(1)
     else:
-        print("Evaluation benchmark PASSED: Agent meets production quality standards.")
+        print(
+            "Deterministic fixture benchmark PASSED. "
+            "Live provider behavior still requires deployment testing."
+        )
         sys.exit(0)

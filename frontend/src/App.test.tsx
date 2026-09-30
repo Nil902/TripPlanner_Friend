@@ -40,6 +40,7 @@ describe('App Component Journeys', () => {
         memberId: 'guest-tab-test',
         name: 'Tab Tester',
         initials: 'TT',
+        accessToken: 'test-guest-token',
       }),
     );
 
@@ -54,7 +55,7 @@ describe('App Component Journeys', () => {
     // Switch to Itinerary
     const itineraryBtn = screen.getByRole('button', { name: /Itinerary/i });
     fireEvent.click(itineraryBtn);
-    expect(screen.getByText(/Spatial Geometry/i)).toBeInTheDocument();
+    expect(screen.getByText(/Stop Locations/i)).toBeInTheDocument();
 
     // Switch to Costs
     const costsBtn = screen.getByRole('button', { name: /Costs/i });
@@ -188,6 +189,7 @@ describe('App Component Journeys', () => {
         memberId: 'guest-mobile-test',
         name: 'Mobile Tester',
         initials: 'MT',
+        accessToken: 'test-guest-token',
       }),
     );
 
@@ -196,6 +198,30 @@ describe('App Component Journeys', () => {
   });
 
   it('persists guest session in localStorage on join and auto-restores room on reload', async () => {
+    vi.spyOn(api.trips, 'list').mockResolvedValue([]);
+    vi.spyOn(api.trips, 'get').mockResolvedValue({
+      id: 'lisbon-202',
+      title: 'Lisbon trip',
+      destination: 'Lisbon, Portugal',
+      start_date: '2026-10-01',
+      end_date: '2026-10-03',
+      creator_id: 'creator',
+      status: 'collecting_constraints',
+      member_ids: ['guest-signed-id'],
+      created_at: new Date().toISOString(),
+    });
+    vi.spyOn(api.trips, 'getMembers').mockResolvedValue([{
+      id: 'guest-signed-id', name: 'Guest Explorer', initials: 'GE',
+      submitted: false, role: 'joiner',
+    }]);
+    vi.spyOn(api.trips, 'join').mockResolvedValueOnce({
+      id: 'guest-signed-id',
+      name: 'Guest Explorer',
+      initials: 'GE',
+      role: 'joiner',
+      submitted: false,
+      access_token: 'signed-guest-token',
+    });
     const { unmount } = render(<App />);
     const input = screen.getByPlaceholderText(/Enter trip code/i);
     fireEvent.change(input, { target: { value: 'lisbon-202' } });
@@ -209,15 +235,17 @@ describe('App Component Journeys', () => {
     fireEvent.click(confirmBtn);
 
     // Room should be visible
-    expect(screen.getByText(/Who's in the room/i)).toBeInTheDocument();
-    expect(localStorage.getItem('ag_guest_session')).toContain('Guest Explorer');
+    await waitFor(() => {
+      expect(screen.getByText(/Who's in the room/i)).toBeInTheDocument();
+      expect(localStorage.getItem('ag_guest_session')).toContain('signed-guest-token');
+    });
 
     // Simulate closing browser
     unmount();
 
     // Reopen browser (render fresh App with localStorage intact)
     render(<App />);
-    expect(screen.getByText(/Who's in the room/i)).toBeInTheDocument();
+    await waitFor(() => expect(screen.getByText(/Who's in the room/i)).toBeInTheDocument());
     // It should NOT be on welcome screen or ask for code
     expect(screen.queryByText(/Plan the trip, not the group chat/i)).not.toBeInTheDocument();
   });
@@ -231,6 +259,7 @@ describe('App Component Journeys', () => {
         memberId: 'guest_user',
         name: 'Guest User',
         initials: 'GU',
+        accessToken: 'test-guest-token',
       }),
     );
 
@@ -405,6 +434,14 @@ describe('App Component Journeys', () => {
   });
 
   it('authenticates admin user, navigates to Admin Dashboard, and browses tabs', async () => {
+    vi.spyOn(api.admin, 'overview').mockResolvedValue({
+      metrics: [{ label: 'Active trips', value: '1', sub: 'Trips that are not completed' }],
+      summary: { total_trips: 1, active_trips: 1, total_users: 1 },
+    });
+    vi.spyOn(api.admin, 'trips').mockResolvedValue([]);
+    vi.spyOn(api.admin, 'users').mockResolvedValue([]);
+    vi.spyOn(api.admin, 'apiUsage').mockResolvedValue([]);
+    vi.spyOn(api.admin, 'systemHealth').mockResolvedValue([]);
     vi.spyOn(api.admin, 'login').mockResolvedValueOnce({
       token: 'mock-admin-token-123',
       user: {
@@ -515,6 +552,7 @@ describe('App Component Journeys', () => {
         memberId: 'guest-plan-mode-test',
         name: 'Mode Tester',
         initials: 'MT',
+        accessToken: 'test-guest-token',
       }),
     );
 

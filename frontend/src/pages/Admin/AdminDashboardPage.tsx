@@ -44,127 +44,15 @@ import { RequireAuth } from '../../middleware';
 
 const RED = '#B3432E';
 
-// Default mock fallbacks if backend is booting or in test environment
-const DEFAULT_METRICS = [
-  { label: 'Active trips', value: '142', sub: '+12 this week' },
-  { label: 'Registered creators', value: '98', sub: '+6 this week' },
-  { label: 'Agent success rate', value: '89%', sub: 'valid on first pass, 30-day avg' },
-  { label: 'API spend, month to date', value: '$4.20', sub: 'of $10.00 committed budget' },
-];
-
-const DEFAULT_TRIPS: AdminTripItem[] = [
-  {
-    id: 't1',
-    name: 'Lisbon trip',
-    destination: 'Lisbon, Portugal',
-    creator: 'Alice',
-    creator_email: 'alice@example.com',
-    members: 4,
-    status: 'active',
-    created: 'Jun 5',
-    start_date: '2026-06-12',
-    end_date: '2026-06-16',
-  },
-  {
-    id: 't2',
-    name: 'Osaka food tour',
-    destination: 'Osaka, Japan',
-    creator: 'Marco',
-    creator_email: 'marco@example.com',
-    members: 3,
-    status: 'active',
-    created: 'Jun 4',
-    start_date: '2026-07-01',
-    end_date: '2026-07-08',
-  },
-  {
-    id: 't3',
-    name: 'Bachelor weekend',
-    destination: 'Austin, USA',
-    creator: 'Devon',
-    creator_email: 'devon@example.com',
-    members: 6,
-    status: 'flagged',
-    created: 'Jun 3',
-    start_date: '2026-08-14',
-    end_date: '2026-08-17',
-  },
-  {
-    id: 't4',
-    name: 'Iceland ring road',
-    destination: 'Reykjavik, Iceland',
-    creator: 'Priya',
-    creator_email: 'priya@example.com',
-    members: 2,
-    status: 'closed',
-    created: 'May 29',
-    start_date: '2026-05-20',
-    end_date: '2026-05-28',
-  },
-];
-
-const DEFAULT_USERS: AdminUserItem[] = [
-  {
-    id: 'u1',
-    name: 'Alice Johnson',
-    email: 'alice@example.com',
-    is_admin: false,
-    trips_count: 3,
-    created_at: 'May 12, 2026',
-  },
-  {
-    id: 'u2',
-    name: 'Marco Rossi',
-    email: 'marco@example.com',
-    is_admin: false,
-    trips_count: 2,
-    created_at: 'May 28, 2026',
-  },
-  {
-    id: 'u3',
-    name: 'Devon Vance',
-    email: 'devon@example.com',
-    is_admin: false,
-    trips_count: 1,
-    created_at: 'Jun 1, 2026',
-  },
-  {
-    id: 'u4',
-    name: 'Platform Administrator',
-    email: 'admin@antigravity.travel',
-    is_admin: true,
-    trips_count: 0,
-    created_at: 'Jan 1, 2026',
-  },
-];
-
-const DEFAULT_API_USAGE: AdminApiUsageItem[] = [
-  { name: 'Google Places API', used: 3120, freeLimit: 10000, cost: 0, category: 'places' },
-  { name: 'Distance Matrix API', used: 1840, freeLimit: 2500, cost: 0, category: 'distance' },
-  { name: 'LLM (Gemini 3.6 Flash)', used: 890, freeLimit: 1500, cost: 4.2, category: 'llm' },
-];
-
-const DEFAULT_SYSTEM: AdminSystemHealthNode[] = [
-  { name: 'Postgres / SQLite DB', status: 'up', detail: '11ms query latency · Pool healthy', latency_ms: 11.2 },
-  { name: 'Redis Cache', status: 'up', detail: 'Cache hit rate 78% · 42MB used', latency_ms: 1.4 },
-  { name: 'Nginx Gateway', status: 'up', detail: 'Rate limit: 0 blocks today', latency_ms: 0.8 },
-  { name: 'Gemini LLM API', status: 'up', detail: 'Elevated throughput, ~1.8s avg', latency_ms: 1800.0 },
-];
-
 interface AuditLog {
   id: string;
   time: string;
-  level: 'info' | 'warn' | 'error';
+  level: "info" | "warn" | "error";
   service: string;
   message: string;
 }
 
-const AUDIT_LOGS: AuditLog[] = [
-  { id: '1', time: '14:20:12', level: 'info', service: 'AgentPlanner', message: 'Itinerary generated successfully for trip t1 (Lisbon) in 2 iterations' },
-  { id: '2', time: '14:18:04', level: 'info', service: 'RedisCache', message: 'Cache hit for place_id ChIJLU7jZBlkJA0R5FsY' },
-  { id: '3', time: '14:05:49', level: 'warn', service: 'RateLimiter', message: 'Burst traffic detected from client IP (92 req/min)' },
-  { id: '4', time: '13:48:22', level: 'info', service: 'SettleUp', message: 'Greedy debt graph reduced 6 transactions down to 2 for trip t3' },
-];
+const AUDIT_LOGS: AuditLog[] = [];
 
 export interface AdminDashboardPageProps {
   onLogout: () => void;
@@ -182,12 +70,13 @@ export default function AdminDashboardPage({
   const [isMobileDrawerOpen, setIsMobileDrawerOpen] = useState(false);
 
   // Live state
-  const [metrics, setMetrics] = useState(DEFAULT_METRICS);
-  const [trips, setTrips] = useState<AdminTripItem[]>(DEFAULT_TRIPS);
-  const [users, setUsers] = useState<AdminUserItem[]>(DEFAULT_USERS);
-  const [apiUsage, setApiUsage] = useState<AdminApiUsageItem[]>(DEFAULT_API_USAGE);
-  const [systemHealth, setSystemHealth] = useState<AdminSystemHealthNode[]>(DEFAULT_SYSTEM);
+  const [metrics, setMetrics] = useState<Array<{ label: string; value: string; sub: string }>>([]);
+  const [trips, setTrips] = useState<AdminTripItem[]>([]);
+  const [users, setUsers] = useState<AdminUserItem[]>([]);
+  const [apiUsage, setApiUsage] = useState<AdminApiUsageItem[]>([]);
+  const [systemHealth, setSystemHealth] = useState<AdminSystemHealthNode[]>([]);
   const [refreshing, setRefreshing] = useState(false);
+  const [adminError, setAdminError] = useState<string | null>(null);
 
   // Trips filtering
   const [tripSearch, setTripSearch] = useState('');
@@ -200,6 +89,7 @@ export default function AdminDashboardPage({
   // Fetch telemetry from backend
   const loadAdminData = async () => {
     setRefreshing(true);
+    setAdminError(null);
     try {
       const [ovData, tripsData, usersData, usageData, healthData] =
         await Promise.allSettled([
@@ -210,23 +100,16 @@ export default function AdminDashboardPage({
           api.admin.systemHealth(),
         ]);
 
-      if (ovData.status === 'fulfilled' && ovData.value?.metrics) {
-        setMetrics(ovData.value.metrics);
+      setMetrics(ovData.status === 'fulfilled' ? ovData.value.metrics : []);
+      setTrips(tripsData.status === 'fulfilled' ? tripsData.value : []);
+      setUsers(usersData.status === 'fulfilled' ? usersData.value : []);
+      setApiUsage(usageData.status === 'fulfilled' ? usageData.value : []);
+      setSystemHealth(healthData.status === 'fulfilled' ? healthData.value : []);
+      if ([ovData, tripsData, usersData, usageData, healthData].some((item) => item.status === 'rejected')) {
+        setAdminError('Some dashboard data could not be loaded. Refresh to try again.');
       }
-      if (tripsData.status === 'fulfilled' && Array.isArray(tripsData.value)) {
-        setTrips(tripsData.value);
-      }
-      if (usersData.status === 'fulfilled' && Array.isArray(usersData.value)) {
-        setUsers(usersData.value);
-      }
-      if (usageData.status === 'fulfilled' && Array.isArray(usageData.value)) {
-        setApiUsage(usageData.value);
-      }
-      if (healthData.status === 'fulfilled' && Array.isArray(healthData.value)) {
-        setSystemHealth(healthData.value);
-      }
-    } catch {
-      // Keep fallbacks in case of offline/mock mode
+    } catch (err: unknown) {
+      setAdminError(err instanceof Error ? err.message : 'Dashboard could not be loaded.');
     } finally {
       setRefreshing(false);
     }
@@ -242,11 +125,8 @@ export default function AdminDashboardPage({
       setTrips((prev) =>
         prev.map((t) => (t.id === tripId ? { ...t, status: newStatus } : t)),
       );
-    } catch {
-      // Local optimistic fallback
-      setTrips((prev) =>
-        prev.map((t) => (t.id === tripId ? { ...t, status: newStatus } : t)),
-      );
+    } catch (err: unknown) {
+      setAdminError(err instanceof Error ? err.message : 'Trip status update failed.');
     }
     setActiveTripActionId(null);
   };
@@ -255,10 +135,10 @@ export default function AdminDashboardPage({
     if (!window.confirm('Are you sure you want to permanently delete this trip room?')) return;
     try {
       await api.admin.deleteTrip(tripId);
-    } catch {
-      // continue
+      setTrips((prev) => prev.filter((t) => t.id !== tripId));
+    } catch (err: unknown) {
+      setAdminError(err instanceof Error ? err.message : 'Trip deletion failed.');
     }
-    setTrips((prev) => prev.filter((t) => t.id !== tripId));
     setActiveTripActionId(null);
   };
 
@@ -596,6 +476,7 @@ export default function AdminDashboardPage({
         }}
       >
         <div style={{ maxWidth: 960, margin: '0 auto' }}>
+          {adminError && <p role="alert" style={{ color: RED }}>{adminError}</p>}
           {/* Top Info Bar */}
           <div
             style={{
@@ -830,10 +711,13 @@ export default function AdminDashboardPage({
                     Recent System Events & Agent Actions
                   </span>
                   <span style={{ fontSize: 12, color: MUTED }}>
-                    Live telemetry stream
+                    No event feed configured
                   </span>
                 </div>
                 <div>
+                  {AUDIT_LOGS.length === 0 && (
+                    <p style={{ padding: '12px 20px', color: MUTED }}>Event logs are unavailable.</p>
+                  )}
                   {AUDIT_LOGS.map((log) => (
                     <div
                       key={log.id}
@@ -1340,7 +1224,7 @@ export default function AdminDashboardPage({
                       color: PINE_DARK,
                     }}
                   >
-                    Estimated from DB Records
+                    Usage collector unavailable
                   </span>
                 </div>
                 <p
@@ -1351,8 +1235,12 @@ export default function AdminDashboardPage({
                     lineHeight: 1.5,
                   }}
                 >
-                  Free-tier consumption across the external services called by the agent planner loop during constraint optimization. Values are calculated from database records, not live API billing.
+                  External API calls and billing are not currently recorded by this application.
                 </p>
+
+                {apiUsage.length === 0 && (
+                  <p style={{ color: MUTED }}>No API usage data is available.</p>
+                )}
 
                 {apiUsage.map((item) => {
                   const pct = Math.min(
@@ -1496,7 +1384,7 @@ export default function AdminDashboardPage({
                       color: PINE_DARK,
                     }}
                   >
-                    Simulated Data
+                    No event feed configured
                   </span>
                 </div>
 
@@ -1610,6 +1498,9 @@ export default function AdminDashboardPage({
                   </span>
                 </div>
 
+                {AUDIT_LOGS.length === 0 && (
+                  <p style={{ padding: '12px 20px', color: MUTED }}>Event logs are unavailable.</p>
+                )}
                 {AUDIT_LOGS.map((l) => (
                   <div
                     key={l.id}

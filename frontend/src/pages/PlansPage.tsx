@@ -34,6 +34,9 @@ export default function PlansPage({
   const [mustSee, setMustSee] = useState('');
   const [mustAvoid, setMustAvoid] = useState('');
   const [saved, setSaved] = useState(false);
+  const [saveError, setSaveError] = useState<string | null>(null);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const [isLoading, setIsLoading] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [constraints, setConstraints] = useState<Constraint[]>([]);
 
@@ -47,10 +50,12 @@ export default function PlansPage({
 
   const loadConstraints = useCallback(() => {
     if (!tripId) return;
+    setIsLoading(true);
     api.constraints
       .list(tripId)
       .then((data) => {
         if (Array.isArray(data)) {
+          setLoadError(null);
           setConstraints(data);
           const current = data.find((c) => c.user_id === activeUser);
           if (current) {
@@ -63,7 +68,10 @@ export default function PlansPage({
         }
       })
       .catch(() => {
-        // Fallback for offline/mock
+        setLoadError('Could not load saved preferences. Please try again.');
+      })
+      .finally(() => {
+        setIsLoading(false);
       });
   }, [tripId, activeUser]);
 
@@ -96,9 +104,11 @@ export default function PlansPage({
 
   const handleSave = async () => {
     setIsSubmitting(true);
+    setSaveError(null);
+    setSaved(false);
     try {
       await api.constraints.submit(tripId, {
-        user_id: activeUser,
+        user_id: currentMemberId,
         budget_per_day: budget,
         dietary,
         style_tags: styles,
@@ -106,12 +116,12 @@ export default function PlansPage({
         must_avoid: mustAvoid ? mustAvoid.split(',').map((s) => s.trim()).filter(Boolean) : [],
       });
       loadConstraints();
-    } catch {
-      // offline fallback
-    } finally {
-      setIsSubmitting(false);
       setSaved(true);
       setTimeout(() => setSaved(false), 3000);
+    } catch (err: unknown) {
+      setSaveError(err instanceof Error ? err.message : 'Could not save your constraints.');
+    } finally {
+      setIsSubmitting(false);
     }
   };
 
@@ -132,6 +142,13 @@ export default function PlansPage({
         Drop your budget, food restrictions, and style tags. The agent uses this
         ground truth to satisfy everyone without endless back-and-forth.
       </p>
+      {isLoading && <p role="status" style={{ color: MUTED }}>Loading saved preferences...</p>}
+      {loadError && (
+        <div role="alert" style={{ color: CLAY }}>
+          {loadError}{' '}
+          <button type="button" onClick={loadConstraints}>Retry</button>
+        </div>
+      )}
 
       {/* Persona Selector */}
       <div
@@ -159,6 +176,7 @@ export default function PlansPage({
               <button
                 key={m.id}
                 type="button"
+                disabled={m.id !== currentMemberId}
                 onClick={() => setActiveUser(m.id)}
                 style={{
                   padding: '5px 12px',
@@ -168,7 +186,7 @@ export default function PlansPage({
                   color: activeUser === m.id ? PINE : INK,
                   fontSize: 13,
                   fontWeight: activeUser === m.id ? 600 : 400,
-                  cursor: 'pointer',
+                  cursor: m.id === currentMemberId ? 'pointer' : 'not-allowed',
                 }}
               >
                 {m.name} {activeUser === m.id ? '✓' : ''}
@@ -177,6 +195,8 @@ export default function PlansPage({
           )}
         </div>
       </div>
+
+      {saveError && <p role="alert" style={{ color: CLAY }}>{saveError}</p>}
 
       {/* Budget Per Day */}
       <div style={{ marginBottom: 24 }}>

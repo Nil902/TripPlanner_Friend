@@ -10,6 +10,19 @@ export interface JoinModalProps {
   onJoin: (member: { name: string; initials: string; tripId: string }) => Promise<void>;
 }
 
+function tripIdFromInput(input: string): string | null {
+  const value = input.trim();
+  if (!value) return null;
+  if (!/^https?:\/\//i.test(value)) return value;
+
+  try {
+    const url = new URL(value);
+    return url.searchParams.get('code')?.trim() || null;
+  } catch {
+    return null;
+  }
+}
+
 export default function JoinModal({
   isOpen,
   onClose,
@@ -42,9 +55,9 @@ export default function JoinModal({
       .toUpperCase()
       .slice(0, 2) || cleanName.slice(0, 2).toUpperCase();
 
-    const tripId = code.trim();
+    const tripId = tripIdFromInput(code);
     if (!tripId) {
-      setError('Enter a trip code or invitation link.');
+      setError('Enter a trip code or a valid invitation link.');
       return;
     }
     setIsJoining(true);
@@ -74,6 +87,13 @@ export default function JoinModal({
       }}
     >
       <div
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="join-modal-title"
+        aria-describedby="join-modal-description"
+        onKeyDown={(event) => {
+          if (event.key === 'Escape') onClose();
+        }}
         style={{
           background: '#fff',
           borderRadius: 16,
@@ -114,6 +134,7 @@ export default function JoinModal({
             </div>
             <div>
               <h2
+                id="join-modal-title"
                 style={{
                   ...SERIF,
                   fontSize: 20,
@@ -124,7 +145,7 @@ export default function JoinModal({
               >
                 Join Trip Room
               </h2>
-              <span style={{ fontSize: 12, color: MUTED }}>
+              <span id="join-modal-description" style={{ fontSize: 12, color: MUTED }}>
                 No account required to join and submit constraints
               </span>
             </div>
@@ -134,6 +155,7 @@ export default function JoinModal({
             onClick={onClose}
             aria-label="Close join modal"
             title="Close"
+            className="focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-emerald-700"
             style={{
               border: 'none',
               background: 'transparent',
@@ -167,6 +189,7 @@ export default function JoinModal({
 
         {error && (
           <div
+            role="alert"
             style={{
               margin: '12px 24px 0',
               padding: '8px 12px',
@@ -193,14 +216,16 @@ export default function JoinModal({
                 color: INK,
               }}
             >
-              Trip Code / Link ID
+              Trip Code or Invitation Link
             </label>
             <input
               id="join-code"
               type="text"
-              placeholder="e.g. lisbon-202 or tokyo-101"
+              placeholder="Paste a trip code or invitation link"
               value={code}
               onChange={(e) => setCode(e.target.value)}
+              autoFocus={!initialCode}
+              className="focus-visible:ring-2 focus-visible:ring-emerald-700"
               style={{
                 width: '100%',
                 padding: '10px 12px',
@@ -233,6 +258,8 @@ export default function JoinModal({
               placeholder="e.g. Cara"
               value={name}
               onChange={(e) => setName(e.target.value)}
+              autoFocus={Boolean(initialCode)}
+              className="focus-visible:ring-2 focus-visible:ring-emerald-700"
               style={{
                 width: '100%',
                 padding: '10px 12px',

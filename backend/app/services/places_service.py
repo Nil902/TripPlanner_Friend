@@ -3,6 +3,7 @@ Places service for querying and caching candidate venues.
 """
 
 import logging
+import math
 import time
 from typing import TypedDict
 
@@ -21,7 +22,7 @@ class CatalogItem(TypedDict):
     lat: float
     lng: float
     est_cost: float
-    hours: tuple[str, str]
+    hours: tuple[str, str] | None
 
 
 # Curated high-fidelity places database for common destinations
@@ -469,10 +470,7 @@ def fetch_from_google_places_api(destination: str) -> list[CatalogItem]:
                     continue
 
                 if resp.status_code != 200:
-                    logger.warning(
-                        f"Google Places API returned {resp.status_code}: "
-                        f"{resp.text[:200]}"
-                    )
+                    logger.warning("Google Places API returned %s", resp.status_code)
                     return []
 
                 data = resp.json()
@@ -518,9 +516,22 @@ def fetch_from_google_places_api(destination: str) -> list[CatalogItem]:
                     else:
                         cat = "landmark"
 
-                    loc = p.get("location", {})
-                    lat = float(loc.get("latitude", 0.0))
-                    lng = float(loc.get("longitude", 0.0))
+                    loc = p.get("location")
+                    if not isinstance(loc, dict):
+                        continue
+                    try:
+                        lat = float(loc["latitude"])
+                        lng = float(loc["longitude"])
+                    except (KeyError, TypeError, ValueError):
+                        continue
+                    if (
+                        not math.isfinite(lat)
+                        or not math.isfinite(lng)
+                        or not -90 <= lat <= 90
+                        or not -180 <= lng <= 180
+                        or (lat == 0.0 and lng == 0.0)
+                    ):
+                        continue
 
                     # Determine realistic cost
                     raw_price_lvl = p.get("priceLevel")
@@ -607,7 +618,10 @@ def fetch_from_google_places_api(destination: str) -> list[CatalogItem]:
                             "lat": lat,
                             "lng": lng,
                             "est_cost": cost,
-                            "hours": ("0900", "2000"),
+                            # Search results do not guarantee complete opening
+                            # periods. Unknown hours must stay unknown rather
+                            # than become a fictional daily schedule.
+                            "hours": None,
                         }
                     )
                 if items:
@@ -627,7 +641,7 @@ def fetch_from_google_places_api(destination: str) -> list[CatalogItem]:
             time.sleep(wait)
         except httpx.HTTPError as exc:
             last_exc = exc
-            logger.warning(f"Google Places API HTTP error: {exc}")
+            logger.warning("Google Places API HTTP error: %s", type(exc).__name__)
             return []
 
     logger.warning(f"Google Places API failed after {max_retries} attempts: {last_exc}")
@@ -693,7 +707,7 @@ def fetch_google_distance_matrix(
             )
             time.sleep(wait)
         except httpx.HTTPError as exc:
-            logger.warning(f"Google Distance Matrix HTTP error: {exc}")
+            logger.warning("Google Distance Matrix HTTP error: %s", type(exc).__name__)
             return None
 
     logger.warning(f"Google Distance Matrix failed after {max_retries} attempts")
@@ -701,9 +715,9 @@ def fetch_google_distance_matrix(
 
 
 def get_or_create_places_for_destination(
-    session: Session, destination: str
+    session: Session, destination: str, *, commit_cache: bool = True
 ) -> list[Place]:
-    """Retrieve or generate cached candidate venues for a given destination."""
+    """Retrieve candidate venues, optionally deferring cache commit to the caller."""
     dest_key = destination.lower().split(",")[0].strip()
     catalog: list[CatalogItem] = DESTINATION_CATALOG.get(dest_key, [])
 
@@ -714,61 +728,11 @@ def get_or_create_places_for_destination(
             catalog = live_places
 
     if not catalog:
-        # Fallback generator for unlisted cities with realistic mock attributes
-        base_lat = 40.7128 if "new york" in dest_key else 37.7749
-        base_lng = -74.0060 if "new york" in dest_key else -122.4194
-        catalog = [
-            {
-                "name": f"{destination} Historic Old Town",
-                "category": "landmark",
-                "lat": base_lat,
-                "lng": base_lng,
-                "est_cost": 0.0,
-                "hours": ("0800", "2000"),
-            },
-            {
-                "name": f"{destination} Central Art Museum",
-                "category": "museum",
-                "lat": base_lat + 0.015,
-                "lng": base_lng + 0.012,
-                "est_cost": 14.0,
-                "hours": ("1000", "1800"),
-            },
-            {
-                "name": f"{destination} Grand Botanical Garden",
-                "category": "park",
-                "lat": base_lat - 0.012,
-                "lng": base_lng - 0.015,
-                "est_cost": 8.0,
-                "hours": ("0900", "1700"),
-            },
-            {
-                "name": f"{destination} Culinary Market Hall",
-                "category": "restaurant",
-                "lat": base_lat + 0.005,
-                "lng": base_lng - 0.008,
-                "est_cost": 24.0,
-                "hours": ("1100", "2200"),
-            },
-            {
-                "name": f"{destination} Panoramic Viewpoint",
-                "category": "viewpoint",
-                "lat": base_lat - 0.022,
-                "lng": base_lng + 0.018,
-                "est_cost": 0.0,
-                "hours": ("0000", "2359"),
-            },
-            {
-                "name": f"{destination} Riverside Bistro",
-                "category": "restaurant",
-                "lat": base_lat + 0.008,
-                "lng": base_lng + 0.014,
-                "est_cost": 32.0,
-                "hours": ("1200", "2300"),
-            },
-        ]
+        logger.warning("No verified venues available for destination %s", destination)
+        return []
 
     places: list[Place] = []
+    added_places = False
     for item in catalog:
         name_str = str(item["name"])
         cat_str = str(item["category"])
@@ -776,8 +740,6 @@ def get_or_create_places_for_destination(
         lng_val = float(item["lng"])
         cost_val = float(item["est_cost"])
         hours_tuple = item["hours"]
-        open_time = str(hours_tuple[0])
-        close_time = str(hours_tuple[1])
 
         place_id = f"place_{dest_key}_{name_str.lower().replace(' ', '_')[:24]}"
         existing = session.get(Place, place_id)
@@ -789,13 +751,21 @@ def get_or_create_places_for_destination(
                 lat=lat_val,
                 lng=lng_val,
                 est_cost=cost_val,
-                opening_hours=build_opening_hours_periods(open_time, close_time),
+                opening_hours=(
+                    build_opening_hours_periods(*hours_tuple)
+                    if hours_tuple is not None
+                    else None
+                ),
                 cached_at=utc_now(),
             )
             session.add(existing)
-            session.commit()
-            session.refresh(existing)
+            added_places = True
         places.append(existing)
+
+    if added_places:
+        session.flush()
+        if commit_cache:
+            session.commit()
 
     return places
 
@@ -806,9 +776,21 @@ def find_alternative_place(
     destination: str,
     max_cost: float,
     excluded_place_ids: list[str],
+    forbidden_terms: list[str] | None = None,
 ) -> Place | None:
     """Finds a replacement venue of matching or complementary category within budget."""
     candidates = get_or_create_places_for_destination(session, destination)
+    excluded_terms = [
+        term.strip().lower() for term in forbidden_terms or [] if term.strip()
+    ]
+    candidates = [
+        p
+        for p in candidates
+        if not any(
+            term in p.name.lower() or term in p.category.lower()
+            for term in excluded_terms
+        )
+    ]
 
     # Priority 1: Same category, not excluded, within budget
     for p in candidates:

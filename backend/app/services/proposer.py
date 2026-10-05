@@ -212,14 +212,14 @@ def call_gemini_proposer(
 
         constraints_summary = [
             {
-                "user_id": c.user_id,
+                "traveler": index,
                 "budget_per_day": c.budget_per_day,
                 "dietary": c.dietary,
                 "style_tags": c.style_tags,
                 "must_see": c.must_see,
                 "must_avoid": c.must_avoid,
             }
-            for c in constraints
+            for index, c in enumerate(constraints, start=1)
         ]
 
         # Build a numbered catalogue so the model can reference venues clearly
@@ -328,7 +328,9 @@ def call_gemini_proposer(
                             .get("text", "")
                         )
                         parsed = json.loads(raw_text)
-                        parsed_days = parsed.get("days", [])
+                        parsed_days = (
+                            parsed.get("days", []) if isinstance(parsed, dict) else []
+                        )
                         if parsed_days and isinstance(parsed_days, list):
                             result_days: list[PlanDayResponse] = []
                             # Trip-wide dedup set: a place_id seen on any day is
@@ -347,6 +349,8 @@ def call_gemini_proposer(
                                 items: list[PlanItemResponse] = []
                                 if match_d:
                                     raw_items = match_d.get("items", [])
+                                    if not isinstance(raw_items, list):
+                                        return None
                                     for it in raw_items:
                                         if not isinstance(it, dict):
                                             continue
@@ -363,14 +367,16 @@ def call_gemini_proposer(
                                                 et = datetime.fromisoformat(
                                                     str(it.get("end_time"))
                                                 )
-                                            except Exception:
-                                                st = datetime.combine(
-                                                    d_date, datetime.min.time()
-                                                ).replace(hour=10)
-                                                et = datetime.combine(
-                                                    d_date, datetime.min.time()
-                                                ).replace(hour=12)
-                                            cost = float(it.get("cost", p_obj.est_cost))
+                                            except (TypeError, ValueError):
+                                                return None
+                                            if (
+                                                st.tzinfo is not None
+                                                or et.tzinfo is not None
+                                                or st.date() != d_date
+                                                or et.date() != d_date
+                                                or et <= st
+                                            ):
+                                                return None
                                             seen_place_ids.add(pid)
                                             items.append(
                                                 PlanItemResponse(
@@ -382,7 +388,7 @@ def call_gemini_proposer(
                                                     day_index=d_idx,
                                                     start_time=st,
                                                     end_time=et,
-                                                    cost=cost,
+                                                    cost=p_obj.est_cost,
                                                 )
                                             )
                                 result_days.append(
@@ -428,17 +434,20 @@ def call_gemini_proposer(
                 if attempt < 2:
                     backoff = (2**attempt) * 1.5
                     logger.warning(
-                        f"Gemini LLM attempt {attempt + 1} failed ({exc}); retrying in {backoff:.1f}s..."
+                        f"Gemini LLM attempt {attempt + 1} failed "
+                        f"({type(exc).__name__}); retrying in {backoff:.1f}s..."
                     )
                     time.sleep(backoff)
                 else:
                     logger.warning(
-                        f"Gemini LLM proposal failed after 3 attempts ({exc}). "
+                        f"Gemini LLM proposal failed after 3 attempts "
+                        f"({type(exc).__name__}). "
                         "Falling back to heuristic proposer."
                     )
     except Exception as exc:
         logger.warning(
-            f"Gemini LLM proposal failed ({exc}). Falling back to heuristic proposer."
+            f"Gemini LLM proposal failed ({type(exc).__name__}). "
+            "Falling back to heuristic proposer."
         )
 
     return None
@@ -648,11 +657,10 @@ def call_gemini_ask(
             "the itinerary when relevant. Use bullet points for lists. When the traveler asks "
             "for MORE recommendations (e.g. 'other temples', 'more museums'), recommend "
             "additional venues from the catalogue that the traveler hasn't asked about yet, "
-            "even if one or more are already set as must-sees — the traveler wants to discover "
-            "complementary options. Prefer catalogue entries but if the catalogue has very few "
-            "options for a specific type, you may suggest 1-2 well-known real-world alternatives "
-            "and note they are not in the current catalogue. Never invent fictional or "
-            "non-existent places.",
+            "even if one or more are already set as must-sees. Recommend only venues in "
+            "the catalogue. Treat listed prices as estimates and do not claim opening "
+            "hours, availability, dietary suitability, or popularity unless the supplied "
+            "data supports the claim. If the catalogue cannot answer the question, say so.",
             f"Destination: {trip.destination}",
             f"Trip dates: {trip.start_date} → {trip.end_date}",
         ]
@@ -739,7 +747,8 @@ def call_gemini_ask(
                 if attempt < 2:
                     backoff = (2**attempt) * 1.5
                     logger.warning(
-                        f"Gemini ask attempt {attempt + 1} failed ({exc}); "
+                        f"Gemini ask attempt {attempt + 1} failed "
+                        f"({type(exc).__name__}); "
                         f"retrying in {backoff:.1f}s..."
                     )
                     time.sleep(backoff)
@@ -747,5 +756,5 @@ def call_gemini_ask(
                     return None
 
     except Exception as exc:
-        logger.warning(f"Gemini ask failed ({exc}).")
+        logger.warning(f"Gemini ask failed ({type(exc).__name__}).")
     return None

@@ -7,9 +7,6 @@ interface AddStopFormProps {
   isOpen: boolean;
   onClose: () => void;
   onAddStop: (stop: Omit<Stop, 'id'>) => Promise<void>;
-  day: number;
-  destination: string;
-  stopsByDay: Record<number, Stop[]>;
   suggestedStops: Array<{ name: string; category: string; cost: number }>;
 }
 
@@ -17,15 +14,13 @@ export default function AddStopForm({
   isOpen,
   onClose,
   onAddStop,
-  day,
-  destination,
-  stopsByDay,
   suggestedStops,
 }: AddStopFormProps) {
   const [newStopName, setNewStopName] = useState('');
   const [newStopTime, setNewStopTime] = useState('16:00');
   const [newStopCost, setNewStopCost] = useState('10');
   const [newStopCategory, setNewStopCategory] = useState('Sightseeing');
+  const [error, setError] = useState<string | null>(null);
 
   const STOP_CATEGORIES = [
     'Sightseeing',
@@ -50,16 +45,6 @@ export default function AddStopForm({
     return `${h12}:${minutes.toString().padStart(2, '0')} ${ampm}`;
   }
 
-  function getDestinationCenter(dest?: string): { lat: number; lng: number } {
-    const d = (dest || '').toLowerCase();
-    if (d.includes('tokyo') || d.includes('japan')) return { lat: 35.6762, lng: 139.6503 };
-    if (d.includes('paris') || d.includes('france')) return { lat: 48.8566, lng: 2.3522 };
-    if (d.includes('new york') || d.includes('nyc')) return { lat: 40.7128, lng: -74.006 };
-    if (d.includes('london')) return { lat: 51.5074, lng: -0.1278 };
-    if (d.includes('siem reap') || d.includes('angkor')) return { lat: 13.4125, lng: 103.8670 };
-    return { lat: 38.7223, lng: -9.1393 };
-  }
-
   const handleSubmit = async (e: FormEvent) => {
     e.preventDefault();
     if (!newStopName.trim()) return;
@@ -67,33 +52,24 @@ export default function AddStopForm({
     const costNum = parseFloat(newStopCost) || 0;
     const displayTime = formatTime24to12(newStopTime);
 
-    const destCenter = getDestinationCenter(destination);
-    const existingDayStops = stopsByDay[day] || [];
-    let optLat = destCenter.lat;
-    let optLng = destCenter.lng;
-    if (existingDayStops.length > 0 && existingDayStops[0].lat && existingDayStops[0].lng) {
-      const angle = (existingDayStops.length * 1.35) % (2 * Math.PI);
-      const dist = 0.008 + (existingDayStops.length % 4) * 0.004;
-      optLat = Number((existingDayStops[0].lat + Math.sin(angle) * dist).toFixed(6));
-      optLng = Number((existingDayStops[0].lng + Math.cos(angle) * dist).toFixed(6));
-    }
-
     const newStop: Omit<Stop, 'id'> = {
       time: displayTime,
       name: newStopName.trim(),
       cost: costNum,
       note: 'Custom stop added manually',
       category: newStopCategory,
-      lat: optLat,
-      lng: optLng,
     };
 
-    await onAddStop(newStop);
-
-    setNewStopName('');
-    setNewStopCost('10');
-    setNewStopCategory('Sightseeing');
-    onClose();
+    setError(null);
+    try {
+      await onAddStop(newStop);
+      setNewStopName('');
+      setNewStopCost('10');
+      setNewStopCategory('Sightseeing');
+      onClose();
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : 'Could not add this stop.');
+    }
   };
 
   if (!isOpen) return null;
@@ -132,6 +108,8 @@ export default function AddStopForm({
         </button>
       </div>
 
+      {error && <p role="alert" style={{ color: '#B45A35', margin: 0 }}>{error}</p>}
+
       <input
         type="text"
         placeholder="Venue / Place name (e.g. MAAT Museum, Night Market)"
@@ -153,7 +131,7 @@ export default function AddStopForm({
 
       <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
         <span style={{ fontSize: 11, color: MUTED, fontWeight: 600 }}>
-          Quick Suggestions ({destination || 'Popular Places'}):
+          Quick Suggestions:
         </span>
         <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
           {suggestedStops.map((sug) => (

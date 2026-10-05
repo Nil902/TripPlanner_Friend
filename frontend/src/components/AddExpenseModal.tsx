@@ -7,7 +7,7 @@ export interface AddExpenseModalProps {
   isOpen: boolean;
   onClose: () => void;
   members: Member[];
-  onAdd: (expense: ExpenseItem) => void;
+  onAdd: (expense: ExpenseItem) => Promise<void>;
 }
 
 export default function AddExpenseModal({
@@ -24,13 +24,14 @@ export default function AddExpenseModal({
     members.map((m) => m.id),
   );
   const [error, setError] = useState<string | null>(null);
+  const [isSubmitting, setIsSubmitting] = useState(false);
 
   if (!isOpen) return null;
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     const num = parseFloat(amount);
-    if (!desc.trim() || isNaN(num) || num <= 0) {
+    if (!desc.trim() || !Number.isFinite(num) || num <= 0) {
       setError('Please enter a valid description and positive amount.');
       return;
     }
@@ -40,15 +41,22 @@ export default function AddExpenseModal({
       return;
     }
 
-    onAdd({
-      id: `exp-${Date.now()}`,
-      desc: desc.trim(),
-      amount: num,
-      paidBy,
-      category,
-      splitBetween,
-    });
-    onClose();
+    setError(null);
+    setIsSubmitting(true);
+    try {
+      await onAdd({
+        desc: desc.trim(),
+        amount: num,
+        paidBy,
+        category,
+        splitBetween,
+      });
+      onClose();
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : 'Could not save the expense.');
+    } finally {
+      setIsSubmitting(false);
+    }
   };
 
   const toggleMember = (name: string) => {
@@ -340,7 +348,9 @@ export default function AddExpenseModal({
             <SecondaryButton type="button" onClick={onClose}>
               Cancel
             </SecondaryButton>
-            <PrimaryButton type="submit">Log Expense</PrimaryButton>
+            <PrimaryButton type="submit" disabled={isSubmitting}>
+              {isSubmitting ? 'Saving...' : 'Log Expense'}
+            </PrimaryButton>
           </div>
         </form>
       </div>

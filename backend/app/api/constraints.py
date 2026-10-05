@@ -6,6 +6,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from sqlmodel import Session, select
 
 from app.core.db import get_session
+from app.core.security import TripAccess, get_trip_access
 from app.models.schema import Constraint, SubmitConstraintRequest, Trip, utc_now
 
 router = APIRouter(prefix="/api/v1/trips/{trip_id}/constraints", tags=["Constraints"])
@@ -16,6 +17,7 @@ def submit_constraint(
     trip_id: str,
     req: SubmitConstraintRequest,
     session: Session = Depends(get_session),
+    access: TripAccess = Depends(get_trip_access),
 ):
     """Submit or update constraints for a trip member."""
     trip = session.get(Trip, trip_id)
@@ -28,6 +30,15 @@ def submit_constraint(
             },
         )
 
+    if req.user_id != access.user_id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail={
+                "code": "FORBIDDEN",
+                "message": "Submit only your own constraints.",
+            },
+        )
+
     if req.budget_per_day <= 0:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -36,11 +47,6 @@ def submit_constraint(
                 "message": "budget_per_day must be greater than 0.",
             },
         )
-
-    # Ensure member is included in trip.member_ids
-    if req.user_id not in trip.member_ids:
-        trip.member_ids = list(trip.member_ids) + [req.user_id]
-        session.add(trip)
 
     # Check for existing constraint for this user
     existing = session.exec(
@@ -80,6 +86,7 @@ def submit_constraint(
 def list_constraints(
     trip_id: str,
     session: Session = Depends(get_session),
+    access: TripAccess = Depends(get_trip_access),
 ):
     """List all submitted constraints for a trip."""
     trip = session.get(Trip, trip_id)

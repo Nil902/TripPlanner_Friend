@@ -11,6 +11,36 @@ describe('API Client Methods', () => {
     expect(url).toContain('/api/v1/trips/trip-123/plan/export.ics');
   });
 
+  it('sends a signed guest token when downloading a trip calendar', async () => {
+    localStorage.setItem('ag_guest_session', JSON.stringify({
+      tripId: 'trip-123', memberId: 'guest-1', name: 'Guest', initials: 'G', accessToken: 'signed-guest',
+    }));
+    const calendar = new Blob(['BEGIN:VCALENDAR'], { type: 'text/calendar' });
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce({
+      ok: true,
+      blob: async () => calendar,
+    } as Response);
+
+    expect(await api.plan.downloadIcs('trip-123')).toBe(calendar);
+    expect(fetchSpy).toHaveBeenCalledWith(
+      expect.stringContaining('/api/v1/trips/trip-123/plan/export.ics'),
+      { headers: { Authorization: 'Bearer signed-guest' } },
+    );
+    localStorage.removeItem('ag_guest_session');
+  });
+
+  it('does not retry a rejected client request', async () => {
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue({
+      ok: false,
+      status: 403,
+      statusText: 'Forbidden',
+      json: async () => ({ detail: { message: 'Only the creator can manage this trip.' } }),
+    } as Response);
+
+    await expect(api.plan.generate('trip-123')).rejects.toThrow('Only the creator');
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
+  });
+
   it('returns empty object for 204 No Content without calling .json()', async () => {
     const jsonSpy = vi.fn();
     vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce({

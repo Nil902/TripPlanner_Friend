@@ -13,7 +13,10 @@ import type {
   UpdateExpenseRequest,
   DisruptionEvent,
   AskAgentResponse,
+  MemberResponse,
 } from '@shared/types';
+
+class ClientRequestError extends Error {}
 
 const BASE =
   import.meta.env.VITE_API_URL !== undefined
@@ -68,13 +71,22 @@ export interface GuestSession {
   memberId: string;
   name: string;
   initials: string;
+  accessToken: string;
 }
 
 export function getGuestSession(): GuestSession | null {
   try {
     const raw = localStorage.getItem('ag_guest_session');
     if (!raw) return null;
-    return JSON.parse(raw) as GuestSession;
+    const session = JSON.parse(raw) as Partial<GuestSession>;
+    if (
+      typeof session.tripId !== 'string' ||
+      typeof session.memberId !== 'string' ||
+      typeof session.name !== 'string' ||
+      typeof session.initials !== 'string' ||
+      typeof session.accessToken !== 'string'
+    ) return null;
+    return session as GuestSession;
   } catch {
     return null;
   }
@@ -104,9 +116,13 @@ async function request<T>(
   };
 
   const isAdminPath = path.startsWith('/api/v1/admin');
+  const guestSession = getGuestSession();
+  const guestToken = guestSession && path.startsWith(`/api/v1/trips/${guestSession.tripId}`)
+    ? guestSession.accessToken
+    : null;
   const token = isAdminPath
     ? getAdminToken() || getAuthToken()
-    : getAuthToken();
+    : getAuthToken() || guestToken;
   if (token) {
     headers['Authorization'] = `Bearer ${token}`;
   }
@@ -151,7 +167,7 @@ async function request<T>(
           } catch {
             // response body is not JSON, keep default message
           }
-          throw new Error(message);
+          throw new ClientRequestError(message);
         }
 
         // 5xx: eligible for retry
@@ -178,6 +194,7 @@ async function request<T>(
     } catch (err) {
       // AbortError should never retry
       if (err instanceof Error && err.name === 'AbortError') throw err;
+      if (err instanceof ClientRequestError) throw err;
       lastError = err;
       if (attempt < retries) {
         await new Promise((resolve) => setTimeout(resolve, 2 ** attempt * 500));
@@ -230,7 +247,7 @@ export const api = {
       api.put<Trip>(`/api/v1/trips/${tripId}`, data),
     delete: (tripId: string) => api.del<{ status: string }>(`/api/v1/trips/${tripId}`),
     join: (tripId: string, data: { name: string; user_id?: string }) =>
-      api.post<{ id: string; name: string; initials: string; submitted: boolean; role: 'creator' | 'joiner' }>(
+      api.post<MemberResponse>(
         `/api/v1/trips/${tripId}/join`,
         data,
       ),
@@ -238,9 +255,9 @@ export const api = {
       api.get<Array<{ id: string; name: string; initials: string; submitted: boolean; role: 'creator' | 'joiner' }>>(
         `/api/v1/trips/${tripId}/members`,
       ),
-    getPermissions: (tripId: string, userId?: string) =>
+    getPermissions: (tripId: string) =>
       api.get<{ can_manage: boolean; is_creator: boolean; role: string }>(
-        `/api/v1/trips/${tripId}/permissions${userId ? `?user_id=${userId}` : ''}`,
+        `/api/v1/trips/${tripId}/permissions`,
       ),
   },
 
@@ -280,6 +297,17 @@ export const api = {
       }),
     getExportIcsUrl: (tripId: string) =>
       `${BASE}/api/v1/trips/${tripId}/plan/export.ics`,
+    downloadIcs: async (tripId: string): Promise<Blob> => {
+      const guestSession = getGuestSession();
+      const token = getAuthToken() || (guestSession?.tripId === tripId
+        ? guestSession.accessToken
+        : null);
+      const response = await fetch(`${BASE}/api/v1/trips/${tripId}/plan/export.ics`, {
+        headers: token ? { Authorization: `Bearer ${token}` } : {},
+      });
+      if (!response.ok) throw new Error('Calendar export failed. Please try again.');
+      return response.blob();
+    },
   },
 
   expenses: {
@@ -333,8 +361,6 @@ export interface AdminOverviewData {
     total_trips: number;
     active_trips: number;
     total_users: number;
-    api_spend: number;
-    cache_hit_rate: string;
   };
 }
 
@@ -374,4 +400,3 @@ export interface AdminSystemHealthNode {
   detail: string;
   latency_ms?: number;
 }
-

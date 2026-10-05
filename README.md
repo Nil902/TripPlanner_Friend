@@ -64,7 +64,9 @@ cd PersonalProject2
 # Create your local environment configuration
 cp .env.example .env
 ```
-Open `.env` and configure your API keys (e.g., `GOOGLE_MAPS_API_KEY`, `ANTHROPIC_API_KEY` or `GEMINI_API_KEY`).
+Open `.env` and configure the API keys you use (`GOOGLE_MAPS_API_KEY` and/or `GEMINI_API_KEY`).
+
+For deployment, set `APP_ENV=production`, use a unique `SECRET_KEY` of at least 32 characters, and set `CORS_ORIGINS` to the deployed frontend origin. Apply database migrations with `cd backend && alembic upgrade head` before starting the API. Keep `ADMIN_EMAIL` and `ADMIN_PASSWORD` empty unless you intend to create an administrator. The deterministic evaluation below uses fixtures; verify live Places and Gemini behavior with your deployment keys before serving real trips.
 
 ---
 

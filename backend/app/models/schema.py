@@ -8,6 +8,7 @@ from enum import StrEnum
 from typing import Any
 
 from pydantic import BaseModel
+from sqlalchemy import DateTime
 from sqlmodel import JSON, Column, Field, SQLModel
 
 
@@ -80,6 +81,16 @@ class Trip(SQLModel, table=True):
     created_at: datetime = Field(default_factory=utc_now)
 
 
+class TripMember(SQLModel, table=True):
+    """Display name supplied when a member joins a trip."""
+
+    __tablename__ = "trip_members"
+
+    trip_id: str = Field(foreign_key="trips.id", primary_key=True)
+    user_id: str = Field(primary_key=True)
+    name: str = Field()
+
+
 class Constraint(SQLModel, table=True):
     __tablename__ = "constraints"
 
@@ -137,8 +148,12 @@ class PlanItem(SQLModel, table=True):
     plan_id: str = Field(foreign_key="plans.id", index=True)
     place_id: str = Field(foreign_key="places.place_id", index=True)
     day_index: int = Field(default=0, index=True)
-    start_time: datetime = Field()
-    end_time: datetime = Field()
+    # Itinerary stops are destination-local wall times. Their IANA timezone is
+    # not stored on Trip, so interpreting them as UTC would change their meaning.
+    # Explicit types also preserve compatibility with SQLModel 0.0.45+, which
+    # otherwise maps plain datetime fields to timezone-aware UTCDateTime.
+    start_time: datetime = Field(sa_column=Column(DateTime(timezone=False)))
+    end_time: datetime = Field(sa_column=Column(DateTime(timezone=False)))
     cost: float = Field(default=0.0)
 
 
@@ -219,6 +234,10 @@ class MemberResponse(BaseModel):
     model_config = {"from_attributes": True}
 
 
+class JoinTripResponse(MemberResponse):
+    access_token: str | None = None
+
+
 class JoinTripRequest(BaseModel):
     name: str
     user_id: str | None = None
@@ -294,8 +313,8 @@ class CreatePlanItemRequest(BaseModel):
     start_time: datetime
     end_time: datetime
     cost: float = 0.0
-    lat: float | None = 0.0
-    lng: float | None = 0.0
+    lat: float | None = None
+    lng: float | None = None
 
 
 class UpdatePlanItemRequest(BaseModel):

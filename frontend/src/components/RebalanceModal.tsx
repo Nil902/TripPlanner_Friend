@@ -1,5 +1,6 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { X, AlertTriangle, Sparkles, RefreshCw, Lock } from 'lucide-react';
+import type { Plan } from '@shared/types';
 import { BORDER, INK, MUTED, PINE, CLAY, SERIF } from '../lib/constants';
 import { PrimaryButton, SecondaryButton } from './Button';
 import { api } from '../lib/api';
@@ -23,50 +24,66 @@ export default function RebalanceModal({
   tripId,
   onRebalanced,
 }: RebalanceModalProps) {
-  const [disruptionType, setDisruptionType] = useState<
-    'venue_closed' | 'flight_delayed' | 'weather_alert' | 'custom'
-  >('venue_closed');
+  const [disruptionType, setDisruptionType] = useState<'venue_closed' | 'flight_delayed'>('venue_closed');
   const [dayIndex, setDayIndex] = useState(0);
-  const [description, setDescription] = useState('Belem Tower is closed for renovation today');
+  const [description, setDescription] = useState('Venue closed');
   const [delayMinutes, setDelayMinutes] = useState(120);
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [plan, setPlan] = useState<Plan | null>(null);
+  const [placeId, setPlaceId] = useState('');
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!isOpen) return;
+    setError(null);
+    api.plan.get(tripId).then(setPlan).catch((err: unknown) => {
+      setPlan(null);
+      setError(err instanceof Error ? err.message : 'Could not load the current plan.');
+    });
+  }, [isOpen, tripId]);
+
+  const dayItems = plan?.days.find((day) => day.day_index === dayIndex)?.items ?? [];
+  const firstPlaceId = dayItems[0]?.place_id ?? '';
+
+  useEffect(() => {
+    setPlaceId(firstPlaceId);
+  }, [dayIndex, firstPlaceId]);
 
   if (!isOpen) return null;
 
   const handleExecute = async () => {
+    if (!plan || (disruptionType === 'venue_closed' && !placeId)) {
+      setError('Choose a scheduled venue before rebalancing.');
+      return;
+    }
     setIsSubmitting(true);
+    setError(null);
     try {
-      await api.plan.rebalance(tripId, {
+      const updated = await api.plan.rebalance(tripId, {
         type: disruptionType,
         day_index: dayIndex,
+        place_id: disruptionType === 'venue_closed' ? placeId : undefined,
         delay_minutes: disruptionType === 'flight_delayed' ? delayMinutes : undefined,
         description,
       });
-    } catch {
-      // Offline / fallback calculation
+      const changedDays = updated.days.filter((day) => {
+        const old = plan.days.find((prior) => prior.day_index === day.day_index);
+        return JSON.stringify(day.items.map((item) => [item.place_id, item.start_time, item.end_time, item.cost]))
+          !== JSON.stringify((old?.items ?? []).map((item) => [item.place_id, item.start_time, item.end_time, item.cost]));
+      });
+      onRebalanced({
+        version: updated.version,
+        scenario: disruptionType.replace('_', ' ').toUpperCase(),
+        affectedWindow: `Day ${dayIndex + 1}`,
+        unaffectedDays: `${updated.days.length - changedDays.length} day(s) unchanged`,
+        substitution: updated.notes.slice(plan.notes.length).join(' ') || 'No changes recorded.',
+      });
+      onClose();
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : 'Rebalance failed.');
+    } finally {
+      setIsSubmitting(false);
     }
-
-    let affectedWindow = `Day ${dayIndex + 1}: Morning Window`;
-    let substitution = 'Swapped in Jeronimos Monastery, same neighborhood, 4 min away.';
-
-    if (disruptionType === 'flight_delayed') {
-      affectedWindow = `Day ${dayIndex + 1}: 9:00 AM – 1:00 PM`;
-      substitution = `Shifted morning sightseeing by ${delayMinutes / 60} hrs and compressed transit buffer.`;
-    } else if (disruptionType === 'weather_alert') {
-      affectedWindow = `Day ${dayIndex + 1}: Afternoon Outdoor activities`;
-      substitution = 'Moved outdoor scenic walk indoors to Calouste Gulbenkian Museum.';
-    }
-
-    onRebalanced({
-      version: 2,
-      scenario: disruptionType.replace('_', ' ').toUpperCase(),
-      affectedWindow,
-      unaffectedDays: 'Day 2 and subsequent days are held invariant & preserved.',
-      substitution,
-    });
-
-    setIsSubmitting(false);
-    onClose();
   };
 
   return (
@@ -135,7 +152,7 @@ export default function RebalanceModal({
                 Dynamic Disruption Simulator
               </h2>
               <span style={{ fontSize: 12, color: MUTED }}>
-                Agent scopes & rebalances only the affected time window
+                Agent rebalances the affected day and preserves other days
               </span>
             </div>
           </div>
@@ -231,44 +248,6 @@ export default function RebalanceModal({
             >
               ✈️ Flight Delayed
             </button>
-            <button
-              type="button"
-              onClick={() => {
-                setDisruptionType('weather_alert');
-                setDescription('Heavy rain expected between 2 PM and 6 PM');
-              }}
-              style={{
-                padding: '10px 12px',
-                borderRadius: 8,
-                border: `1.5px solid ${disruptionType === 'weather_alert' ? PINE : BORDER}`,
-                background: disruptionType === 'weather_alert' ? '#EFEAE0' : '#fff',
-                fontSize: 13,
-                fontWeight: disruptionType === 'weather_alert' ? 600 : 400,
-                textAlign: 'left',
-                cursor: 'pointer',
-              }}
-            >
-              🌧️ Weather Alert
-            </button>
-            <button
-              type="button"
-              onClick={() => {
-                setDisruptionType('custom');
-                setDescription('Lunch venue fully booked, need nearby alternative under $25');
-              }}
-              style={{
-                padding: '10px 12px',
-                borderRadius: 8,
-                border: `1.5px solid ${disruptionType === 'custom' ? PINE : BORDER}`,
-                background: disruptionType === 'custom' ? '#EFEAE0' : '#fff',
-                fontSize: 13,
-                fontWeight: disruptionType === 'custom' ? 600 : 400,
-                textAlign: 'left',
-                cursor: 'pointer',
-              }}
-            >
-              ⚡ Custom Change
-            </button>
           </div>
 
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, marginBottom: 16 }}>
@@ -297,8 +276,11 @@ export default function RebalanceModal({
                   outline: 'none',
                 }}
               >
-                <option value={0}>Day 1 (Arrival)</option>
-                <option value={1}>Day 2 (Exploration)</option>
+                {(plan?.days ?? []).map((day) => (
+                  <option key={day.day_index} value={day.day_index}>
+                    Day {day.day_index + 1}
+                  </option>
+                ))}
               </select>
             </div>
 
@@ -334,6 +316,25 @@ export default function RebalanceModal({
                 </select>
               </div>
             )}
+            {disruptionType === 'venue_closed' && (
+              <div>
+                <label htmlFor="closed-venue" style={{ display: 'block', fontSize: 13, marginBottom: 6, color: INK }}>
+                  Closed Venue
+                </label>
+                <select
+                  id="closed-venue"
+                  value={placeId}
+                  onChange={(event) => setPlaceId(event.target.value)}
+                  style={{ width: '100%', padding: '9px 12px', borderRadius: 8, border: `1px solid ${BORDER}` }}
+                >
+                  {dayItems.map((item) => (
+                    <option key={item.id} value={item.place_id}>
+                      {item.place?.name ?? item.place_id}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            )}
           </div>
 
           <div style={{ marginBottom: 24 }}>
@@ -364,13 +365,15 @@ export default function RebalanceModal({
             />
           </div>
 
+          {error && <p role="alert" style={{ color: CLAY, fontSize: 13 }}>{error}</p>}
+
           <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 10 }}>
             <SecondaryButton type="button" onClick={onClose}>
               Cancel
             </SecondaryButton>
             <PrimaryButton
               type="button"
-              disabled={isSubmitting}
+              disabled={isSubmitting || !plan || (disruptionType === 'venue_closed' && !placeId)}
               onClick={handleExecute}
               style={{ background: CLAY }}
             >

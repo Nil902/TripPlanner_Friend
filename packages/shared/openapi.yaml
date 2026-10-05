@@ -8,9 +8,13 @@ servers:
   - url: http://localhost:8000
     description: Local development server
 
+security:
+  - BearerAuth: []
+
 paths:
   /healthz:
     get:
+      security: []
       summary: Healthcheck
       operationId: checkHealth
       responses:
@@ -30,6 +34,7 @@ paths:
 
   /api/v1/auth/signup:
     post:
+      security: []
       summary: Register a new user account
       operationId: signup
       requestBody:
@@ -48,6 +53,7 @@ paths:
 
   /api/v1/auth/login:
     post:
+      security: []
       summary: Authenticate user credentials
       operationId: login
       requestBody:
@@ -168,6 +174,7 @@ paths:
 
   /api/v1/trips/{trip_id}/join:
     post:
+      security: []
       summary: Join a trip room as a participant
       operationId: joinTrip
       parameters:
@@ -188,7 +195,7 @@ paths:
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/Member"
+                $ref: "#/components/schemas/JoinTripResponse"
         "404":
           description: Trip not found
 
@@ -222,11 +229,6 @@ paths:
         - name: trip_id
           in: path
           required: true
-          schema:
-            type: string
-        - name: user_id
-          in: query
-          required: false
           schema:
             type: string
       responses:
@@ -376,6 +378,8 @@ paths:
                 $ref: "#/components/schemas/PlanItem"
         "404":
           description: Plan item not found
+        "409":
+          description: Item belongs to an older plan version; reload the itinerary
     delete:
       summary: Remove a plan item from the itinerary
       operationId: deletePlanItem
@@ -395,6 +399,8 @@ paths:
           description: Plan item removed successfully
         "404":
           description: Plan item not found
+        "409":
+          description: Item belongs to an older plan version; reload the itinerary
 
   /api/v1/trips/{trip_id}/plan/validate:
     post:
@@ -498,11 +504,15 @@ paths:
               $ref: "#/components/schemas/DisruptionEvent"
       responses:
         "200":
-          description: Newly versioned plan with isolated rebalanced window
+          description: Newly versioned plan with the affected day rebalanced
           content:
             application/json:
               schema:
                 $ref: "#/components/schemas/Plan"
+        "400":
+          description: Invalid day, missing scheduled venue, or invalid flight delay
+        "422":
+          description: Disruption type is not supported for rebalancing
 
   /api/v1/trips/{trip_id}/expenses:
     get:
@@ -705,6 +715,15 @@ components:
         user_id:
           type: string
 
+    JoinTripResponse:
+      allOf:
+        - $ref: "#/components/schemas/Member"
+        - type: object
+          properties:
+            access_token:
+              type: [string, "null"]
+              description: Signed guest token returned only to a guest joining this trip.
+
     TripPermissions:
       type: object
       required:
@@ -887,6 +906,7 @@ components:
         type:
           type: string
           enum: [venue_closed, flight_delayed, weather_alert, custom]
+          description: Only venue_closed and flight_delayed can be rebalanced currently.
         day_index:
           type: integer
         place_id:
@@ -1085,11 +1105,13 @@ components:
           enum: [collecting_constraints, planned, in_progress, completed]
         member_ids:
           type: array
+          description: Existing members to retain. Must include the creator; members with expenses cannot be removed.
           items:
             type: string
 
     CreatePlanItemRequest:
       type: object
+      description: Latitude and longitude must be supplied together when known.
       required:
         - day_index
         - place_name
@@ -1100,6 +1122,7 @@ components:
           type: integer
         place_name:
           type: string
+          minLength: 1
         category:
           type: string
         start_time:
@@ -1110,18 +1133,25 @@ components:
           format: date-time
         cost:
           type: number
+          minimum: 0
         lat:
           type: number
+          minimum: -90
+          maximum: 90
         lng:
           type: number
+          minimum: -180
+          maximum: 180
 
     UpdatePlanItemRequest:
       type: object
+      description: Latitude and longitude must be supplied together when updated.
       properties:
         day_index:
           type: integer
         place_name:
           type: string
+          minLength: 1
         category:
           type: string
         start_time:
@@ -1132,10 +1162,15 @@ components:
           format: date-time
         cost:
           type: number
+          minimum: 0
         lat:
           type: number
+          minimum: -90
+          maximum: 90
         lng:
           type: number
+          minimum: -180
+          maximum: 180
 
     RefinePlanRequest:
       type: object
@@ -1211,4 +1246,4 @@ components:
     BearerAuth:
       type: http
       scheme: bearer
-      bearerFormat: JWT
+      bearerFormat: Opaque signed token

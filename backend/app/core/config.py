@@ -4,6 +4,7 @@ Application configuration using Pydantic Settings.
 
 import logging
 import secrets
+from typing import Literal
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -11,6 +12,7 @@ logger = logging.getLogger(__name__)
 
 
 class Settings(BaseSettings):
+    APP_ENV: Literal["development", "production"] = "development"
     PROJECT_NAME: str = "Autonomous Travel & Group Itinerary Coordinator"
     DATABASE_URL: str = "sqlite:///./travel_planner.db"
     SECRET_KEY: str = ""
@@ -45,7 +47,23 @@ class Settings(BaseSettings):
     )
 
 
+def validate_production_settings(config: Settings) -> None:
+    """Reject insecure production settings before the app starts."""
+    if config.APP_ENV != "production":
+        return
+    if (
+        len(config.SECRET_KEY) < 32
+        or config.SECRET_KEY == "dev-secret-key-change-in-production-token-secret"
+    ):
+        raise RuntimeError(
+            "A unique SECRET_KEY of at least 32 characters is required in production."
+        )
+    if "*" in config.cors_origins_list:
+        raise RuntimeError("Wildcard CORS origins are prohibited in production.")
+
+
 settings = Settings()
+validate_production_settings(settings)
 
 if not settings.SECRET_KEY:
     if (

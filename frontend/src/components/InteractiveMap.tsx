@@ -29,12 +29,23 @@ interface ProjectedPoint {
   index: number;
 }
 
+function hasCoordinates(stop: Stop): stop is Stop & { lat: number; lng: number } {
+  return typeof stop.lat === 'number' && typeof stop.lng === 'number'
+    && Number.isFinite(stop.lat) && Number.isFinite(stop.lng)
+    && stop.lat !== 0 && stop.lng !== 0;
+}
+
 export default function InteractiveMap({ stops, dayIndex }: InteractiveMapProps) {
   const [hoveredIndex, setHoveredIndex] = useState<number | null>(null);
+  const locatedStops = useMemo(
+    () => stops.filter(hasCoordinates),
+    [stops],
+  );
+  const missingCount = stops.length - locatedStops.length;
 
-  const { points, totalDistanceKm, estTransitMins } = useMemo(() => {
-    if (!stops || stops.length === 0) {
-      return { points: [], totalDistanceKm: 0, estTransitMins: 0 };
+  const { points, totalDistanceKm } = useMemo(() => {
+    if (locatedStops.length === 0) {
+      return { points: [], totalDistanceKm: 0 };
     }
 
     const SVG_WIDTH = 500;
@@ -44,18 +55,7 @@ export default function InteractiveMap({ stops, dayIndex }: InteractiveMapProps)
     const USABLE_W = SVG_WIDTH - PAD_X * 2;
     const USABLE_H = SVG_HEIGHT - PAD_Y * 2;
 
-    // Resolve lat/lng coordinates for each stop
-    const resolvedStops = stops.map((s, idx) => {
-      let lat = typeof s.lat === 'number' && !isNaN(s.lat) && s.lat !== 0 ? s.lat : null;
-      let lng = typeof s.lng === 'number' && !isNaN(s.lng) && s.lng !== 0 ? s.lng : null;
-
-      if (lat === null || lng === null) {
-        // Fallback: distribute smoothly in destination area
-        lat = 38.71 + Math.sin(idx * 1.5) * 0.015;
-        lng = -9.14 + Math.cos(idx * 1.5) * 0.025;
-      }
-      return { ...s, lat, lng };
-    });
+    const resolvedStops = locatedStops;
 
     // Single stop: center in canvas
     if (resolvedStops.length === 1) {
@@ -69,7 +69,6 @@ export default function InteractiveMap({ stops, dayIndex }: InteractiveMapProps)
           },
         ],
         totalDistanceKm: 0,
-        estTransitMins: 0,
       };
     }
 
@@ -134,17 +133,11 @@ export default function InteractiveMap({ stops, dayIndex }: InteractiveMapProps)
       );
     }
 
-    const transitMins = Math.max(
-      5,
-      Math.round(distKm * 3.5 + (resolvedStops.length - 1) * 6),
-    );
-
     return {
       points: pts,
       totalDistanceKm: distKm,
-      estTransitMins: transitMins,
     };
-  }, [stops]);
+  }, [locatedStops]);
 
   // Build SVG path data for route connecting the points
   const pathD = useMemo(() => {
@@ -177,11 +170,11 @@ export default function InteractiveMap({ stops, dayIndex }: InteractiveMapProps)
         <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
           <Compass size={16} color={PINE} />
           <span style={{ ...SERIF, fontSize: 15, fontWeight: 600, color: INK }}>
-            Day {dayIndex} Route Map & Spatial Geometry
+            Day {dayIndex} Stop Locations
           </span>
         </div>
         <span style={{ fontSize: 12, color: MUTED }}>
-          Geographic projection & route optimization
+          Geographic projection of located stops
         </span>
       </div>
 
@@ -200,7 +193,7 @@ export default function InteractiveMap({ stops, dayIndex }: InteractiveMapProps)
           justifyContent: 'center',
         }}
       >
-        {stops.length === 0 ? (
+        {locatedStops.length === 0 ? (
           <div
             style={{
               display: 'flex',
@@ -214,10 +207,12 @@ export default function InteractiveMap({ stops, dayIndex }: InteractiveMapProps)
           >
             <MapPin size={28} color={MUTED} style={{ opacity: 0.5 }} />
             <span style={{ fontSize: 13, fontStyle: 'italic' }}>
-              No stops scheduled for Day {dayIndex} yet.
+              {stops.length === 0
+                ? `No stops scheduled for Day ${dayIndex} yet.`
+                : 'No stops have verified coordinates yet.'}
             </span>
             <span style={{ fontSize: 11, color: MUTED }}>
-              Add a destination stop below to plot its real route on this map.
+              Add stops with known locations to show them on this map.
             </span>
           </div>
         ) : (
@@ -228,9 +223,9 @@ export default function InteractiveMap({ stops, dayIndex }: InteractiveMapProps)
             preserveAspectRatio="xMidYMid meet"
             style={{ position: 'absolute', inset: 0 }}
             role="img"
-            aria-label={`Day ${dayIndex} route map showing ${stops.length} stop${stops.length === 1 ? '' : 's'}: ${stops.map((s) => s.name).join(', ')}`}
+            aria-label={`Day ${dayIndex} stop map showing ${locatedStops.length} located stop${locatedStops.length === 1 ? '' : 's'}: ${locatedStops.map((s) => s.name).join(', ')}`}
           >
-            <title>Day {dayIndex} route map — {stops.length} stop{stops.length === 1 ? '' : 's'}</title>
+            <title>Day {dayIndex} stop map — {locatedStops.length} located stop{locatedStops.length === 1 ? '' : 's'}</title>
             <defs>
               <filter id="shadow" x="-20%" y="-20%" width="140%" height="140%">
                 <feDropShadow dx="0" dy="2" stdDeviation="2" floodOpacity="0.2" />
@@ -387,18 +382,15 @@ export default function InteractiveMap({ stops, dayIndex }: InteractiveMapProps)
         }}
       >
         <span style={{ display: 'flex', alignItems: 'center', gap: 4, fontWeight: 500 }}>
-          <Navigation size={13} color={CLAY} /> {stops.length} stop{stops.length === 1 ? '' : 's'} sequenced
-          {totalDistanceKm > 0 && ` (${totalDistanceKm.toFixed(1)} km total)`}
+          <Navigation size={13} color={CLAY} /> {locatedStops.length} located stop{locatedStops.length === 1 ? '' : 's'}
+          {totalDistanceKm > 0 && ` (${totalDistanceKm.toFixed(1)} km straight-line)`}
         </span>
         <span>
-          {stops.length > 1
-            ? `Est. transit between stops: ~${estTransitMins} mins`
-            : stops.length === 1
-            ? 'Add more stops to see transit routes'
-            : 'No transit legs yet'}
+          {missingCount > 0
+            ? `${missingCount} stop${missingCount === 1 ? '' : 's'} omitted: location unknown`
+            : 'Locations shown in itinerary order'}
         </span>
       </div>
     </div>
   );
 }
-

@@ -19,6 +19,7 @@ import {
 import { QRCodeCanvas } from 'qrcode.react';
 import {
   BORDER,
+  CLAY,
   MUTED,
   PINE,
   SERIF,
@@ -96,6 +97,7 @@ export default function OverviewPage({
   const qrCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const [isGenerating, setIsGenerating] = useState(false);
   const [generationStep, setGenerationStep] = useState<string | null>(null);
+  const [generationError, setGenerationError] = useState<string | null>(null);
 
   // Manual "Plan it yourself" destination visit form state
   const [manualDay, setManualDay] = useState<number>(1);
@@ -105,6 +107,7 @@ export default function OverviewPage({
   const [manualCost, setManualCost] = useState<string>('15');
   const [isSubmittingManual, setIsSubmittingManual] = useState<boolean>(false);
   const [manualSuccessMsg, setManualSuccessMsg] = useState<string | null>(null);
+  const [manualError, setManualError] = useState<string | null>(null);
   const [manualStops, setManualStops] = useState<
     Array<{ id?: string; day: number; name: string; time: string; cost: number; category: string }>
   >([]);
@@ -117,12 +120,7 @@ export default function OverviewPage({
       : null) ||
     (destKey.includes('tokyo') ? DESTINATION_SUGGESTIONS['tokyo'] : null) ||
     (destKey.includes('paris') ? DESTINATION_SUGGESTIONS['paris'] : null) ||
-    DESTINATION_SUGGESTIONS['lisbon'] || [
-      { name: 'City Center Historic Walk', category: 'Landmark', cost: 0 },
-      { name: 'Central Food Market', category: 'Restaurant', cost: 20 },
-      { name: 'National Art Museum', category: 'Museum', cost: 12 },
-      { name: 'Scenic Panoramic Viewpoint', category: 'Viewpoint', cost: 0 },
-    ];
+    [];
 
   const refreshPlanStops = useCallback(() => {
     if (!trip?.id) return;
@@ -171,6 +169,7 @@ export default function OverviewPage({
     if (!manualName.trim() || isSubmittingManual) return;
     setIsSubmittingManual(true);
     setManualSuccessMsg(null);
+    setManualError(null);
 
     const costNum = parseFloat(manualCost) || 0;
     const dayIdx = manualDay - 1;
@@ -179,16 +178,17 @@ export default function OverviewPage({
       const [hoursStr, minutesStr] = manualTime.split(':');
       const hours = parseInt(hoursStr || '10', 10);
       const minutes = parseInt(minutesStr || '0', 10);
-      const endH = (hours + 2) % 24;
+      const endH = Math.min(hours + 2, 23);
+      const endMinutes = hours + 2 >= 24 ? 59 : minutes;
 
       const baseDate = new Date(trip.start_date);
-      baseDate.setDate(baseDate.getDate() + dayIdx);
+      baseDate.setUTCDate(baseDate.getUTCDate() + dayIdx);
       const dateStr = !isNaN(baseDate.getTime())
         ? baseDate.toISOString().split('T')[0]
         : new Date().toISOString().split('T')[0];
 
       const startTime = `${dateStr}T${hours.toString().padStart(2, '0')}:${minutes.toString().padStart(2, '0')}:00`;
-      const endTime = `${dateStr}T${endH.toString().padStart(2, '0')}:${minutes.toString().padStart(2, '0')}:00`;
+      const endTime = `${dateStr}T${endH.toString().padStart(2, '0')}:${endMinutes.toString().padStart(2, '0')}:00`;
 
       await api.plan.addItem(trip.id, {
         day_index: dayIdx,
@@ -203,25 +203,11 @@ export default function OverviewPage({
       setManualSuccessMsg(`Added "${manualName.trim()}" to Day ${manualDay}!`);
       setManualName('');
 
-      const nextHour = (hours + 2) % 24;
+      const nextHour = Math.min(hours + 2, 23);
       setManualTime(`${nextHour.toString().padStart(2, '0')}:${minutes.toString().padStart(2, '0')}`);
       setTimeout(() => setManualSuccessMsg(null), 4000);
-    } catch {
-      // Offline fallback
-      setManualStops((prev) => [
-        ...prev,
-        {
-          id: `manual-${Date.now()}`,
-          day: manualDay,
-          name: manualName.trim(),
-          time: manualTime,
-          cost: costNum,
-          category: manualCategory,
-        },
-      ]);
-      setManualSuccessMsg(`Added "${manualName.trim()}" to Day ${manualDay}!`);
-      setManualName('');
-      setTimeout(() => setManualSuccessMsg(null), 4000);
+    } catch (err: unknown) {
+      setManualError(err instanceof Error ? err.message : 'Could not add the stop.');
     } finally {
       setIsSubmittingManual(false);
     }
@@ -233,10 +219,11 @@ export default function OverviewPage({
       if (!stopId.startsWith('manual-')) {
         await api.plan.deleteItem(trip.id, stopId);
       }
-    } catch {
-      // ignore
+      setManualStops((prev) => prev.filter((s) => s.id !== stopId));
+      refreshPlanStops();
+    } catch (err: unknown) {
+      setManualError(err instanceof Error ? err.message : 'Could not remove the stop.');
     }
-    setManualStops((prev) => prev.filter((s) => s.id !== stopId));
   };
 
   const submittedCount = members.filter((m) => m.submitted).length;
@@ -362,30 +349,17 @@ export default function OverviewPage({
 
   const handleGenerate = async () => {
     setIsGenerating(true);
-    setGenerationStep('Gathering member budget & dietary constraints...');
-
-    setTimeout(() => {
-      setGenerationStep('Calling Google Places API for verified venues...');
-    }, 500);
-
-    setTimeout(() => {
-      setGenerationStep('Validating travel times via Distance Matrix...');
-    }, 1000);
-
-    setTimeout(() => {
-      setGenerationStep('Resolving schedule & converging on optimal plan...');
-    }, 1500);
+    setGenerationError(null);
+    setGenerationStep('Generating and validating the itinerary...');
 
     try {
       await api.plan.generate(trip.id);
-    } catch {
-      // Keep rich fallback notes
+      setActive('itinerary');
+    } catch (err: unknown) {
+      setGenerationError(err instanceof Error ? err.message : 'Could not generate an itinerary.');
     } finally {
-      setTimeout(() => {
-        setIsGenerating(false);
-        setGenerationStep(null);
-        setActive('itinerary');
-      }, 2000);
+      setIsGenerating(false);
+      setGenerationStep(null);
     }
   };
 
@@ -858,6 +832,7 @@ export default function OverviewPage({
             </div>
           </form>
 
+          {manualError && <p role="alert" style={{ color: CLAY }}>{manualError}</p>}
           {manualSuccessMsg && (
             <div
               style={{
@@ -983,9 +958,13 @@ export default function OverviewPage({
         </div>
       )}
 
+      {generationError && (
+        <p role="alert" style={{ color: CLAY, marginBottom: 16 }}>{generationError}</p>
+      )}
+
       {/* Action Button */}
       <div style={{ display: 'flex', alignItems: 'center', gap: 14 }}>
-        {planMode === 'ai' ? (
+        {planMode === 'ai' && isCreator ? (
           <PrimaryButton
             onClick={handleGenerate}
             disabled={isGenerating}
@@ -999,14 +978,14 @@ export default function OverviewPage({
               </>
             )}
           </PrimaryButton>
-        ) : (
+        ) : planMode === 'manual' ? (
           <PrimaryButton
             onClick={() => setActive('itinerary')}
             style={{ padding: '12px 24px' }}
           >
             <MapPin size={16} /> {manualStops.length > 0 ? `View Route Map (${manualStops.length} stops)` : 'Open Full Itinerary'}
           </PrimaryButton>
-        )}
+        ) : null}
 
         {!isCreator && (
           <span style={{ fontSize: 13, color: MUTED }}>

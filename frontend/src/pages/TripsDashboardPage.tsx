@@ -290,7 +290,7 @@ export default function TripsDashboardPage({
                       </div>
 
                       <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
-                        {onManageTrip && (
+                        {onManageTrip && trip.creator_id === creatorUser?.id && (
                           <button
                             type="button"
                             onClick={(e) => {

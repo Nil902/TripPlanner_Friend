@@ -2,10 +2,13 @@
 Expense logging and settle-up API endpoints.
 """
 
+import math
+
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlmodel import Session, col, select
 
 from app.core.db import get_session
+from app.core.security import TripAccess, get_trip_access
 from app.models.schema import (
     CreateExpenseRequest,
     Expense,
@@ -23,6 +26,7 @@ def add_expense(
     trip_id: str,
     req: CreateExpenseRequest,
     session: Session = Depends(get_session),
+    access: TripAccess = Depends(get_trip_access),
 ):
     """Log a new group expense."""
     trip = session.get(Trip, trip_id)
@@ -35,7 +39,7 @@ def add_expense(
             },
         )
 
-    if req.amount <= 0:
+    if not math.isfinite(req.amount) or req.amount <= 0:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail={
@@ -52,6 +56,16 @@ def add_expense(
                 "message": "Payer must be a member of the trip.",
             },
         )
+    if req.paid_by != access.user_id and not (
+        access.is_admin or access.user_id == trip.creator_id
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail={
+                "code": "FORBIDDEN",
+                "message": "Cannot log another member's payment.",
+            },
+        )
 
     invalid_splits = (
         [m for m in req.split_between if m not in trip.member_ids]
@@ -64,6 +78,14 @@ def add_expense(
             detail={
                 "code": "NOT_A_MEMBER",
                 "message": f"Split member(s) not in trip: {', '.join(invalid_splits)}",
+            },
+        )
+    if req.split_between and len(req.split_between) != len(set(req.split_between)):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={
+                "code": "INVALID_SPLIT",
+                "message": "Split members must be unique.",
             },
         )
 
@@ -90,6 +112,7 @@ def add_expense(
 def list_expenses(
     trip_id: str,
     session: Session = Depends(get_session),
+    access: TripAccess = Depends(get_trip_access),
 ):
     """List all recorded expenses for a trip."""
     trip = session.get(Trip, trip_id)
@@ -116,6 +139,7 @@ def update_expense(
     expense_id: str,
     req: UpdateExpenseRequest,
     session: Session = Depends(get_session),
+    access: TripAccess = Depends(get_trip_access),
 ):
     """Update an existing expense (Always allow all edits)."""
     expense = session.get(Expense, expense_id)
@@ -128,7 +152,7 @@ def update_expense(
             },
         )
 
-    if req.amount is not None and req.amount <= 0:
+    if req.amount is not None and (not math.isfinite(req.amount) or req.amount <= 0):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail={
@@ -138,6 +162,16 @@ def update_expense(
         )
 
     trip = session.get(Trip, expense.trip_id)
+    if access.user_id != expense.paid_by and not (
+        access.is_admin or (trip and access.user_id == trip.creator_id)
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail={
+                "code": "FORBIDDEN",
+                "message": "Cannot edit another member's expense.",
+            },
+        )
 
     if req.paid_by is not None:
         if trip and req.paid_by not in trip.member_ids:
@@ -148,6 +182,13 @@ def update_expense(
                     "message": "Payer must be a member of the trip.",
                 },
             )
+        if req.paid_by != access.user_id and not (
+            access.is_admin or (trip and access.user_id == trip.creator_id)
+        ):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail={"code": "FORBIDDEN", "message": "Cannot assign another payer."},
+            )
         expense.paid_by = req.paid_by
     if req.amount is not None:
         expense.amount = req.amount
@@ -156,6 +197,24 @@ def update_expense(
     if req.category is not None:
         expense.category = req.category
     if req.split_between is not None:
+        if not req.split_between or len(req.split_between) != len(
+            set(req.split_between)
+        ):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail={
+                    "code": "INVALID_SPLIT",
+                    "message": "Split members must be a nonempty unique list.",
+                },
+            )
+        if trip and any(member not in trip.member_ids for member in req.split_between):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail={
+                    "code": "NOT_A_MEMBER",
+                    "message": "Split members must belong to trip.",
+                },
+            )
         expense.split_between = req.split_between
 
     session.add(expense)
@@ -169,6 +228,7 @@ def delete_expense(
     trip_id: str,
     expense_id: str,
     session: Session = Depends(get_session),
+    access: TripAccess = Depends(get_trip_access),
 ):
     """Delete an expense."""
     expense = session.get(Expense, expense_id)
@@ -181,6 +241,18 @@ def delete_expense(
             },
         )
 
+    trip = session.get(Trip, trip_id)
+    if access.user_id != expense.paid_by and not (
+        access.is_admin or (trip and access.user_id == trip.creator_id)
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail={
+                "code": "FORBIDDEN",
+                "message": "Cannot delete another member's expense.",
+            },
+        )
+
     session.delete(expense)
     session.commit()
     return None
@@ -190,6 +262,7 @@ def delete_expense(
 def get_settle_up(
     trip_id: str,
     session: Session = Depends(get_session),
+    access: TripAccess = Depends(get_trip_access),
 ):
     """Calculate greedy minimal-transaction debt settlement."""
     trip = session.get(Trip, trip_id)

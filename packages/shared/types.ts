@@ -258,7 +258,9 @@ export interface Member {
   role: 'creator' | 'joiner';
 }
 
-export type MemberResponse = Member;
+export interface MemberResponse extends Member {
+  access_token?: string | null;
+}
 
 export interface JoinTripRequest {
   name: string;
@@ -272,4 +274,3 @@ export interface TripPermissions {
 }
 
 export type TripPermissionsResponse = TripPermissions;
-

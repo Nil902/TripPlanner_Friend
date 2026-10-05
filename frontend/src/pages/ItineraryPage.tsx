@@ -36,18 +36,6 @@ export interface ItineraryPageProps {
   planMode?: 'ai' | 'manual';
 }
 
-function getDestinationCenter(dest?: string): { lat: number; lng: number } {
-  const d = (dest || '').toLowerCase();
-  if (d.includes('tokyo') || d.includes('japan')) return { lat: 35.6762, lng: 139.6503 };
-  if (d.includes('paris') || d.includes('france')) return { lat: 48.8566, lng: 2.3522 };
-  if (d.includes('new york') || d.includes('nyc')) return { lat: 40.7128, lng: -74.006 };
-  if (d.includes('london')) return { lat: 51.5074, lng: -0.1278 };
-  if (d.includes('siem reap') || d.includes('angkor')) return { lat: 13.4125, lng: 103.8670 };
-  if (d.includes('bangkok')) return { lat: 13.7563, lng: 100.5018 };
-  if (d.includes('bali')) return { lat: -8.3405, lng: 115.0920 };
-  return { lat: 38.7223, lng: -9.1393 }; // Lisbon default
-}
-
 const DESTINATION_SUGGESTIONS: Record<string, Array<{ name: string; category: string; cost: number }>> = {
   lisbon: [
     { name: 'Belém Tower', category: 'Sightseeing', cost: 10 },
@@ -103,11 +91,7 @@ interface PlanDayItem {
   }>;
 }
 
-function convertPlanDaysToStops(
-  days: PlanDayItem[],
-  destinationName?: string,
-): Record<number, Stop[]> {
-  const defaultCenter = getDestinationCenter(destinationName);
+function convertPlanDaysToStops(days: PlanDayItem[]): Record<number, Stop[]> {
   const result: Record<number, Stop[]> = {};
   for (const d of days) {
     const dayNumber = d.day_index + 1;
@@ -137,8 +121,8 @@ function convertPlanDaysToStops(
         cost: item.cost ?? item.place?.est_cost ?? 0,
         note: item.place?.category || null,
         category: item.place?.category || 'Sightseeing',
-        lat: item.place?.lat || defaultCenter.lat,
-        lng: item.place?.lng || defaultCenter.lng,
+        lat: item.place?.lat ?? 0,
+        lng: item.place?.lng ?? 0,
       };
     });
     result[dayNumber] = mappedStops.sort((a, b) => {
@@ -188,9 +172,7 @@ export default function ItineraryPage({ tripId }: ItineraryPageProps) {
     api.trips
       .get(tripId)
       .then((trip) => {
-        let currentDest = '';
         if (trip?.destination) {
-          currentDest = trip.destination;
           setDestination(trip.destination);
         }
         if (trip?.start_date && trip?.end_date) {
@@ -200,9 +182,8 @@ export default function ItineraryPage({ tripId }: ItineraryPageProps) {
           const count = Math.max(1, diff + 1);
           setTripDays(Array.from({ length: count }, (_, i) => i + 1));
         }
-        return currentDest;
       })
-      .then((currentDest) => {
+      .then(() => {
         return api.plan.get(tripId).then((plan) => {
           if (plan) {
             setPlanVersion(plan.version || 1);
@@ -210,7 +191,7 @@ export default function ItineraryPage({ tripId }: ItineraryPageProps) {
             if (plan.days && plan.days.length > 0) {
               setPlanDaysList(plan.days.map((d) => ({ day_index: d.day_index, date: String(d.date) })));
               setTripDays(plan.days.map((d) => d.day_index + 1));
-              const mapped = convertPlanDaysToStops(plan.days, currentDest || destination);
+              const mapped = convertPlanDaysToStops(plan.days);
               setStopsByDay(mapped);
             }
           }
@@ -219,15 +200,15 @@ export default function ItineraryPage({ tripId }: ItineraryPageProps) {
       .catch(() => {
         // Fallback for initial state before planning
       });
-  }, [tripId, destination]);
+  }, [tripId]);
 
   const handleRefined = useCallback((version: number, newNotes: string[], days: PlanDayItem[]) => {
     setPlanVersion(version);
     setNotes(newNotes);
     if (days && days.length > 0) {
-      setStopsByDay(convertPlanDaysToStops(days, destination));
+      setStopsByDay(convertPlanDaysToStops(days));
     }
-  }, [destination]);
+  }, []);
 
   useEffect(() => {
     loadPlan();
@@ -242,7 +223,7 @@ export default function ItineraryPage({ tripId }: ItineraryPageProps) {
         setPlanVersion(generated.version || 1);
         setNotes(generated.notes || []);
         if (generated.days && generated.days.length > 0) {
-          setStopsByDay(convertPlanDaysToStops(generated.days, destination));
+          setStopsByDay(convertPlanDaysToStops(generated.days));
           setTripDays(generated.days.map((d) => d.day_index + 1));
         }
       }
@@ -260,15 +241,17 @@ export default function ItineraryPage({ tripId }: ItineraryPageProps) {
     const [hoursStr, minutesStr] = newStop.time.includes(':') ? newStop.time.split(':') : ['16', '00'];
     const hours = parseInt(hoursStr, 10);
     const minutes = parseInt(minutesStr.replace(/\D/g, ''), 10);
-    const endH = (hours + 2) % 24;
+    const endH = Math.min(hours + 2, 23);
+    const endMinutes = hours + 2 >= 24 ? 59 : minutes;
 
     const dayDateStr =
       planDaysList.find((p) => p.day_index === dayIdx)?.date ||
       new Date().toISOString().split('T')[0];
     const startTime = `${dayDateStr}T${hours.toString().padStart(2, '0')}:${minutes.toString().padStart(2, '0')}:00`;
-    const endTime = `${dayDateStr}T${endH.toString().padStart(2, '0')}:${minutes.toString().padStart(2, '0')}:00`;
+    const endTime = `${dayDateStr}T${endH.toString().padStart(2, '0')}:${endMinutes.toString().padStart(2, '0')}:00`;
 
     try {
+      setGenerateError(null);
       const addedItem = await api.plan.addItem(tripId, {
         day_index: dayIdx,
         place_name: newStop.name,
@@ -306,8 +289,9 @@ export default function ItineraryPage({ tripId }: ItineraryPageProps) {
         }));
       }
       loadPlan();
-    } catch {
-      // Offline fallback: already placed optimistically in state
+    } catch (err: unknown) {
+      setGenerateError(err instanceof Error ? err.message : 'Could not add the stop.');
+      throw err;
     }
   };
 
@@ -317,13 +301,32 @@ export default function ItineraryPage({ tripId }: ItineraryPageProps) {
       if (!stopId.startsWith('stop-')) {
         await api.plan.deleteItem(tripId, stopId);
       }
-    } catch {
-      // offline fallback
+      loadPlan();
+    } catch (err: unknown) {
+      setGenerateError(err instanceof Error ? err.message : 'Could not delete the stop.');
+      return;
     }
     setStopsByDay((prev) => ({
       ...prev,
       [day]: (prev[day] || []).filter((s) => s.id !== stopId),
     }));
+  };
+
+  const handleExport = async () => {
+    try {
+      setGenerateError(null);
+      const blob = await api.plan.downloadIcs(tripId);
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = `trip-${tripId}.ics`;
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      URL.revokeObjectURL(url);
+    } catch (err: unknown) {
+      setGenerateError(err instanceof Error ? err.message : 'Calendar export failed.');
+    }
   };
 
   const availableDays = Array.from(
@@ -340,7 +343,7 @@ export default function ItineraryPage({ tripId }: ItineraryPageProps) {
       : null) ||
     (destKey.includes('tokyo') ? DESTINATION_SUGGESTIONS['tokyo'] : null) ||
     (destKey.includes('paris') ? DESTINATION_SUGGESTIONS['paris'] : null) ||
-    DESTINATION_SUGGESTIONS['lisbon'];
+    [];
 
   return (
     <div style={{ width: '100%', maxWidth: 760, margin: '0 auto' }}>
@@ -410,10 +413,7 @@ export default function ItineraryPage({ tripId }: ItineraryPageProps) {
           </PrimaryButton>
 
           <SecondaryButton
-            onClick={() => {
-              const url = api.plan.getExportIcsUrl(tripId);
-              window.open(url, '_blank');
-            }}
+            onClick={handleExport}
             style={{
               fontSize: 13,
               padding: '8px 14px',
@@ -544,9 +544,6 @@ export default function ItineraryPage({ tripId }: ItineraryPageProps) {
         isOpen={isAddingStop}
         onClose={() => setIsAddingStop(false)}
         onAddStop={handleAddStop}
-        day={day}
-        destination={destination}
-        stopsByDay={stopsByDay}
         suggestedStops={suggestedStops}
       />
 
@@ -562,7 +559,7 @@ export default function ItineraryPage({ tripId }: ItineraryPageProps) {
         onClose={() => setIsRebalanceOpen(false)}
         tripId={tripId}
         onRebalanced={(result) => {
-          setPlanVersion((v) => v + 1);
+          setPlanVersion(result.version);
           setActiveDiff(result);
           loadPlan();
         }}

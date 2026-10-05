@@ -39,6 +39,7 @@ def init_db() -> None:
         Plan,
         PlanItem,
         Trip,
+        TripMember,
         User,
     )
 

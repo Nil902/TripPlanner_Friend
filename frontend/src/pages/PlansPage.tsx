@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from 'react';
-import { Check, Users, Sparkles } from 'lucide-react';
+import { Check, ChevronDown, Users, Sparkles } from 'lucide-react';
 import type { Constraint } from '@shared/types';
 import {
   BORDER,
@@ -34,6 +34,9 @@ export default function PlansPage({
   const [mustSee, setMustSee] = useState('');
   const [mustAvoid, setMustAvoid] = useState('');
   const [saved, setSaved] = useState(false);
+  const [saveError, setSaveError] = useState<string | null>(null);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const [isLoading, setIsLoading] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [constraints, setConstraints] = useState<Constraint[]>([]);
 
@@ -47,10 +50,12 @@ export default function PlansPage({
 
   const loadConstraints = useCallback(() => {
     if (!tripId) return;
+    setIsLoading(true);
     api.constraints
       .list(tripId)
       .then((data) => {
         if (Array.isArray(data)) {
+          setLoadError(null);
           setConstraints(data);
           const current = data.find((c) => c.user_id === activeUser);
           if (current) {
@@ -63,7 +68,10 @@ export default function PlansPage({
         }
       })
       .catch(() => {
-        // Fallback for offline/mock
+        setLoadError('Could not load saved preferences. Please try again.');
+      })
+      .finally(() => {
+        setIsLoading(false);
       });
   }, [tripId, activeUser]);
 
@@ -96,9 +104,11 @@ export default function PlansPage({
 
   const handleSave = async () => {
     setIsSubmitting(true);
+    setSaveError(null);
+    setSaved(false);
     try {
       await api.constraints.submit(tripId, {
-        user_id: activeUser,
+        user_id: currentMemberId,
         budget_per_day: budget,
         dietary,
         style_tags: styles,
@@ -106,12 +116,12 @@ export default function PlansPage({
         must_avoid: mustAvoid ? mustAvoid.split(',').map((s) => s.trim()).filter(Boolean) : [],
       });
       loadConstraints();
-    } catch {
-      // offline fallback
-    } finally {
-      setIsSubmitting(false);
       setSaved(true);
       setTimeout(() => setSaved(false), 3000);
+    } catch (err: unknown) {
+      setSaveError(err instanceof Error ? err.message : 'Could not save your constraints.');
+    } finally {
+      setIsSubmitting(false);
     }
   };
 
@@ -132,6 +142,13 @@ export default function PlansPage({
         Drop your budget, food restrictions, and style tags. The agent uses this
         ground truth to satisfy everyone without endless back-and-forth.
       </p>
+      {isLoading && <p role="status" style={{ color: MUTED }}>Loading saved preferences...</p>}
+      {loadError && (
+        <div role="alert" style={{ color: CLAY }}>
+          {loadError}{' '}
+          <button type="button" onClick={loadConstraints}>Retry</button>
+        </div>
+      )}
 
       {/* Persona Selector */}
       <div
@@ -159,6 +176,7 @@ export default function PlansPage({
               <button
                 key={m.id}
                 type="button"
+                disabled={m.id !== currentMemberId}
                 onClick={() => setActiveUser(m.id)}
                 style={{
                   padding: '5px 12px',
@@ -168,7 +186,7 @@ export default function PlansPage({
                   color: activeUser === m.id ? PINE : INK,
                   fontSize: 13,
                   fontWeight: activeUser === m.id ? 600 : 400,
-                  cursor: 'pointer',
+                  cursor: m.id === currentMemberId ? 'pointer' : 'not-allowed',
                 }}
               >
                 {m.name} {activeUser === m.id ? '✓' : ''}
@@ -177,6 +195,8 @@ export default function PlansPage({
           )}
         </div>
       </div>
+
+      {saveError && <p role="alert" style={{ color: CLAY }}>{saveError}</p>}
 
       {/* Budget Per Day */}
       <div style={{ marginBottom: 24 }}>
@@ -344,68 +364,42 @@ export default function PlansPage({
       </PrimaryButton>
 
       {/* Group Submitted Constraints Snapshot */}
-      <div
-        style={{
-          marginTop: 36,
-          padding: '18px 20px',
-          borderRadius: 12,
-          background: '#fff',
-          border: `1px solid ${BORDER}`,
-        }}
-      >
-        <div
-          style={{
-            display: 'flex',
-            alignItems: 'center',
-            gap: 8,
-            marginBottom: 12,
-          }}
-        >
-          <Users size={16} color={PINE} />
-          <span style={{ fontSize: 13, fontWeight: 600, color: INK }}>
-            Group Constraints Overview:
+      <details className="group mt-9 rounded-xl border border-stone-200 bg-white">
+        <summary className="flex cursor-pointer list-none items-center gap-2 rounded-xl px-5 py-4 text-sm font-semibold text-stone-800 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-emerald-700 [&::-webkit-details-marker]:hidden">
+          <Users size={16} aria-hidden="true" className="text-emerald-800" />
+          <span>Group Constraints Overview</span>
+          <span className="ml-auto text-xs font-normal text-stone-500">
+            {constraints.length} {constraints.length === 1 ? 'member' : 'members'}
           </span>
-        </div>
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+          <ChevronDown size={16} aria-hidden="true" className="text-stone-500 transition-transform group-open:rotate-180" />
+        </summary>
+        <div className="px-5 pb-5">
           {constraints.length === 0 ? (
-            <div
-              style={{
-                padding: '12px 14px',
-                borderRadius: 8,
-                background: '#FAF6EE',
-                fontSize: 13,
-                color: MUTED,
-                fontStyle: 'italic',
-              }}
-            >
+            <p className="rounded-lg bg-amber-50 p-3 text-sm italic text-stone-600">
               No constraints submitted yet. Submit your preferences above to add your voice to the plan.
-            </div>
+            </p>
           ) : (
-            constraints.map((c) => {
-              const matchedMember = members.find((m) => m.id === c.user_id);
-              const displayName = matchedMember?.name || c.user_id.replace(/_/g, ' ').replace(/\b\w/g, (l) => l.toUpperCase());
-              return (
-                <div
-                  key={c.id || c.user_id}
-                  style={{
-                    padding: '8px 12px',
-                    borderRadius: 8,
-                    background: '#FAF6EE',
-                    fontSize: 12,
-                    lineHeight: 1.4,
-                  }}
-                >
-                  <strong>{displayName}:</strong> ${c.budget_per_day}/day
-                  {c.dietary && c.dietary.length > 0 ? ` • ${c.dietary.join(', ')}` : ''}
-                  {c.style_tags && c.style_tags.length > 0 ? ` • ${c.style_tags.join(', ')}` : ''}
-                  {c.must_see && c.must_see.length > 0 ? ` • Must-see: ${c.must_see.join(', ')}` : ''}
-                  {c.must_avoid && c.must_avoid.length > 0 ? ` • Avoid: ${c.must_avoid.join(', ')}` : ''}
-                </div>
-              );
-            })
+            <ul className="list-disc space-y-3 pl-5 text-sm text-stone-800">
+              {constraints.map((c) => {
+                const matchedMember = members.find((m) => m.id === c.user_id);
+                const displayName = matchedMember?.name || c.user_id.replace(/_/g, ' ').replace(/\b\w/g, (l) => l.toUpperCase());
+                return (
+                  <li key={c.id || c.user_id}>
+                    <strong>{displayName}</strong>
+                    <ul className="mt-1 list-disc space-y-1 pl-5 text-stone-600">
+                      <li>Budget: ${c.budget_per_day} per day</li>
+                      {c.dietary?.length > 0 && <li>Dietary: {c.dietary.join(', ')}</li>}
+                      {c.style_tags?.length > 0 && <li>Travel style: {c.style_tags.join(', ')}</li>}
+                      {c.must_see?.length > 0 && <li>Must-see: {c.must_see.join(', ')}</li>}
+                      {c.must_avoid?.length > 0 && <li>Avoid: {c.must_avoid.join(', ')}</li>}
+                    </ul>
+                  </li>
+                );
+              })}
+            </ul>
           )}
         </div>
-      </div>
+      </details>
     </div>
   );
 }

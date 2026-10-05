@@ -6,12 +6,14 @@ import pytest
 from httpx import ASGITransport, AsyncClient
 
 from app.main import app
+from tests.support import register_creator
 
 
 @pytest.mark.asyncio
 async def test_refine_plan_and_version_bump():
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as client:
+        creator_id = await register_creator(client)
         # 1. Create a trip
         trip_resp = await client.post(
             "/api/v1/trips",
@@ -20,7 +22,7 @@ async def test_refine_plan_and_version_bump():
                 "destination": "Lisbon",
                 "start_date": "2026-06-01",
                 "end_date": "2026-06-03",
-                "creator_id": "creator_refine_test",
+                "creator_id": creator_id,
             },
         )
         assert trip_resp.status_code == 201
@@ -30,7 +32,7 @@ async def test_refine_plan_and_version_bump():
         await client.post(
             f"/api/v1/trips/{trip_id}/constraints",
             json={
-                "user_id": "creator_refine_test",
+                "user_id": creator_id,
                 "budget_per_day": 80.0,
                 "dietary": ["vegetarian"],
                 "style_tags": ["relaxed", "foodie"],
@@ -50,7 +52,7 @@ async def test_refine_plan_and_version_bump():
             f"/api/v1/trips/{trip_id}/plan/refine",
             json={
                 "instruction": "Make Day 2 more relaxed with fewer activities",
-                "user_id": "creator_refine_test",
+                "user_id": creator_id,
             },
         )
         assert refine_resp.status_code == 200
@@ -86,7 +88,7 @@ async def test_refine_plan_and_version_bump():
             f"/api/v1/trips/{trip_id}/plan/refine",
             json={
                 "instruction": "Add a nightlife stop or entertainment in the evening on Day 1",
-                "user_id": "creator_refine_test",
+                "user_id": creator_id,
             },
         )
         assert refine_ent_resp.status_code == 200
@@ -105,6 +107,7 @@ async def test_manual_add_item_without_prior_plan():
     """Test 'Plan it yourself': adding a stop directly creates plan v1 and sets trip to PLANNED."""
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as client:
+        creator_id = await register_creator(client)
         # Create trip
         trip_resp = await client.post(
             "/api/v1/trips",
@@ -113,13 +116,28 @@ async def test_manual_add_item_without_prior_plan():
                 "destination": "Lisbon",
                 "start_date": "2026-07-10",
                 "end_date": "2026-07-12",
-                "creator_id": "manual_user_1",
+                "creator_id": creator_id,
             },
         )
         assert trip_resp.status_code == 201
         trip_id = trip_resp.json()["id"]
 
         # Directly add a manual stop without calling /plan (AI generator)
+        missing_validation = await client.post(f"/api/v1/trips/{trip_id}/plan/validate")
+        assert missing_validation.status_code == 200
+        assert missing_validation.json()["is_valid"] is False
+
+        overnight = await client.post(
+            f"/api/v1/trips/{trip_id}/plan/items",
+            json={
+                "day_index": 0,
+                "place_name": "Overnight invalid stop",
+                "start_time": "2026-07-10T23:00:00",
+                "end_time": "2026-07-11T01:00:00",
+            },
+        )
+        assert overnight.status_code == 400
+
         item_resp = await client.post(
             f"/api/v1/trips/{trip_id}/plan/items",
             json={
@@ -135,6 +153,7 @@ async def test_manual_add_item_without_prior_plan():
         item = item_resp.json()
         assert item["place"]["name"] == "Calouste Gulbenkian Museum"
         assert item["cost"] == 10.0
+        assert item["place"]["lat"] == 38.7375
 
         # Verify plan was created and can be fetched
         get_plan_resp = await client.get(f"/api/v1/trips/{trip_id}/plan")
@@ -146,3 +165,82 @@ async def test_manual_add_item_without_prior_plan():
         assert (
             plan["days"][0]["items"][0]["place"]["name"] == "Calouste Gulbenkian Museum"
         )
+
+        second = await client.post(
+            f"/api/v1/trips/{trip_id}/plan/items",
+            json={
+                "day_index": 1,
+                "place_name": "Another custom stop",
+                "start_time": "2026-07-11T10:00:00",
+                "end_time": "2026-07-11T11:00:00",
+                "cost": 0.0,
+            },
+        )
+        assert second.status_code == 200
+        assert second.json()["place"]["lat"] == 0.0
+        assert second.json()["place"]["lng"] == 0.0
+        assert (
+            await client.get(f"/api/v1/trips/{trip_id}/plan?version=1")
+        ).json() == plan
+        stale_edit = await client.put(
+            f"/api/v1/trips/{trip_id}/plan/items/{item['id']}",
+            json={"cost": 25.0},
+        )
+        assert stale_edit.status_code == 409
+        latest_plan = (await client.get(f"/api/v1/trips/{trip_id}/plan")).json()
+        current_item = latest_plan["days"][0]["items"][0]
+        moved = await client.put(
+            f"/api/v1/trips/{trip_id}/plan/items/{current_item['id']}",
+            json={"day_index": 2},
+        )
+        assert moved.status_code == 200
+        assert moved.json()["start_time"].startswith("2026-07-12")
+
+        partial_coordinates = await client.post(
+            f"/api/v1/trips/{trip_id}/plan/items",
+            json={
+                "day_index": 0,
+                "place_name": "Incomplete location",
+                "start_time": "2026-07-10T09:00:00",
+                "end_time": "2026-07-10T10:00:00",
+                "lat": 0.0,
+            },
+        )
+        assert partial_coordinates.status_code == 400
+        assert partial_coordinates.json()["detail"]["code"] == "INVALID_COORDINATES"
+
+        blank_name = await client.post(
+            f"/api/v1/trips/{trip_id}/plan/items",
+            json={
+                "day_index": 0,
+                "place_name": "   ",
+                "start_time": "2026-07-10T09:00:00",
+                "end_time": "2026-07-10T10:00:00",
+            },
+        )
+        assert blank_name.status_code == 400
+        assert blank_name.json()["detail"]["code"] == "INVALID_PLACE_NAME"
+
+        renamed = await client.put(
+            f"/api/v1/trips/{trip_id}/plan/items/{moved.json()['id']}",
+            json={"place_name": "Unknown replacement"},
+        )
+        assert renamed.status_code == 200
+        assert renamed.json()["place"]["lat"] == 0.0
+        assert renamed.json()["place"]["lng"] == 0.0
+        assert renamed.json()["place"]["opening_hours"] is None
+
+        equator = await client.post(
+            f"/api/v1/trips/{trip_id}/plan/items",
+            json={
+                "day_index": 0,
+                "place_name": "Equator stop",
+                "start_time": "2026-07-10T09:00:00",
+                "end_time": "2026-07-10T10:00:00",
+                "lat": 0.0,
+                "lng": 20.0,
+            },
+        )
+        assert equator.status_code == 200
+        assert equator.json()["place"]["lat"] == 0.0
+        assert equator.json()["place"]["lng"] == 20.0

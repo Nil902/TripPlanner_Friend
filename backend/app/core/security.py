@@ -7,6 +7,7 @@ import hashlib
 import hmac
 import os
 import time
+from dataclasses import dataclass
 
 from fastapi import Depends, HTTPException, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
@@ -16,6 +17,16 @@ from app.core.config import settings
 from app.core.db import get_session
 
 bearer_scheme = HTTPBearer(auto_error=False)
+
+
+@dataclass(frozen=True)
+class TripAccess:
+    """Identity verified for one trip, independent of client supplied roles."""
+
+    trip_id: str
+    user_id: str
+    is_admin: bool = False
+    is_guest: bool = False
 
 
 def hash_password(password: str) -> str:
@@ -72,6 +83,85 @@ def decode_access_token(token: str) -> str | None:
         return user_id
     except Exception:
         return None
+
+
+def create_guest_token(trip_id: str, member_id: str) -> str:
+    """Issue a signed token scoped to one guest membership."""
+    return create_access_token(f"guest|{trip_id}|{member_id}")
+
+
+def get_trip_access(
+    trip_id: str,
+    auth: HTTPAuthorizationCredentials | None = Depends(bearer_scheme),
+    session: Session = Depends(get_session),
+) -> TripAccess:
+    """Require a valid account or scoped guest token for a trip."""
+    from app.models.schema import Trip, User
+
+    trip = session.get(Trip, trip_id)
+    if trip is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={"code": "TRIP_NOT_FOUND", "message": "Trip not found."},
+        )
+    if auth is None or not auth.credentials:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail={"code": "UNAUTHORIZED", "message": "Authentication required."},
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+    subject = decode_access_token(auth.credentials)
+    if subject is None:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail={"code": "INVALID_TOKEN", "message": "Invalid or expired token."},
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+
+    guest_parts = subject.split("|", 2)
+    if len(guest_parts) == 3 and guest_parts[0] == "guest":
+        _, token_trip_id, member_id = guest_parts
+        if token_trip_id != trip_id or member_id not in trip.member_ids:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail={"code": "FORBIDDEN", "message": "Not a trip member."},
+            )
+        return TripAccess(trip_id=trip_id, user_id=member_id, is_guest=True)
+
+    user = session.get(User, subject)
+    if user is None:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail={"code": "INVALID_TOKEN", "message": "User account not found."},
+        )
+    if not user.is_admin and user.id not in trip.member_ids:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail={"code": "FORBIDDEN", "message": "Not a trip member."},
+        )
+    return TripAccess(trip_id=trip_id, user_id=user.id, is_admin=user.is_admin)
+
+
+def require_trip_manager(
+    access: TripAccess = Depends(get_trip_access),
+    session: Session = Depends(get_session),
+) -> TripAccess:
+    """Require the authenticated creator or an administrator."""
+    from app.models.schema import Trip
+
+    # The principal was already checked against the trip in get_trip_access.
+    trip = session.get(Trip, access.trip_id)
+    if access.is_admin or (
+        trip is not None and not access.is_guest and access.user_id == trip.creator_id
+    ):
+        return access
+    raise HTTPException(
+        status_code=status.HTTP_403_FORBIDDEN,
+        detail={
+            "code": "FORBIDDEN",
+            "message": "Only the trip creator can manage this trip.",
+        },
+    )
 
 
 def get_current_user_optional(

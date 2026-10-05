@@ -107,6 +107,7 @@ async def test_admin_overview_and_trips():
         overview = overview_resp.json()
         assert "metrics" in overview
         assert "summary" in overview
+        assert all("API spend" not in metric["label"] for metric in overview["metrics"])
 
         # Trips list
         trips_resp = await client.get("/api/v1/admin/trips", headers=headers)
@@ -139,12 +140,13 @@ async def test_admin_system_health_and_usage():
         # API Usage
         usage_resp = await client.get("/api/v1/admin/api-usage", headers=headers)
         assert usage_resp.status_code == 200
-        assert len(usage_resp.json()) >= 3
+        assert usage_resp.json() == []
 
         # System Health
         health_resp = await client.get("/api/v1/admin/system-health", headers=headers)
         assert health_resp.status_code == 200
         assert any("Database" in node["name"] for node in health_resp.json())
+        assert not any("Gateway" in node["name"] for node in health_resp.json())
 
         # Users list
         users_resp = await client.get("/api/v1/admin/users", headers=headers)

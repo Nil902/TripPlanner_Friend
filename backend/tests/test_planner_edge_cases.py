@@ -64,7 +64,7 @@ def test_agent_planner_max_iterations_and_constraint_relaxation():
             "Reached maximum iterations (5)" in note for note in plan_response.notes
         )
         assert any(
-            "Relaxed daily budget cap by 15%" in note for note in plan_response.notes
+            "15% daily budget relaxation" in note for note in plan_response.notes
         )
 
 

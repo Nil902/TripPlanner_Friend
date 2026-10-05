@@ -31,7 +31,14 @@ describe('App Component Journeys', () => {
     expect(screen.getByLabelText(/Email Address/i)).toBeInTheDocument();
   });
 
-  it('switches between tabs inside the trip room (as guest joiner)', () => {
+  it('switches between tabs inside the trip room (as guest joiner)', async () => {
+    vi.spyOn(api.expenses, 'list').mockResolvedValue([]);
+    vi.spyOn(api.expenses, 'settleUp').mockResolvedValue({
+      trip_id: 'trip-lisbon-202',
+      user_balances: [],
+      transfers: [],
+    });
+
     // Pre-populate a guest session so the app opens directly in the room
     localStorage.setItem(
       'ag_guest_session',
@@ -60,7 +67,7 @@ describe('App Component Journeys', () => {
     // Switch to Costs
     const costsBtn = screen.getByRole('button', { name: /Costs/i });
     fireEvent.click(costsBtn);
-    expect(screen.getByText(/Total Group Spend/i)).toBeInTheDocument();
+    expect(await screen.findByText(/Total Group Spend/i)).toBeInTheDocument();
   });
 
   it('navigates to Creator Auth screen and toggles between Sign In and Create Account', () => {

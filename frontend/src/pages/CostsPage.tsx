@@ -1,6 +1,14 @@
 import { useState, useEffect, useCallback } from 'react';
 import type { SettleUpReport } from '@shared/types';
-import { Plus, ArrowRight, CheckCircle2, Wallet } from 'lucide-react';
+import {
+  AlertTriangle,
+  ArrowRight,
+  CheckCircle2,
+  Loader2,
+  Plus,
+  RefreshCw,
+  Wallet,
+} from 'lucide-react';
 import {
   BORDER,
   CLAY,
@@ -26,41 +34,47 @@ export default function CostsPage({
   const [expenses, setExpenses] = useState<ExpenseItem[]>([]);
   const [settleUpReport, setSettleUpReport] = useState<SettleUpReport | null>(null);
   const [isAddOpen, setIsAddOpen] = useState(false);
+  const [isLoading, setIsLoading] = useState(true);
+  const [loadError, setLoadError] = useState<string | null>(null);
 
-  const loadExpenses = useCallback(() => {
-    if (!tripId) return;
-    api.expenses
-      .list(tripId)
-      .then((data) => {
-        if (Array.isArray(data)) {
-          const mapped: ExpenseItem[] = data.map((e) => ({
-            id: e.id,
-            paidBy: e.paid_by,
-            amount: e.amount,
-            desc: e.description,
-            category: e.category || 'activity',
-            splitBetween: e.split_between || [],
-          }));
-          setExpenses(mapped);
-        }
-      })
-      .catch(() => {
-        // Fallback
-      });
-  }, [tripId]);
+  const loadExpenseData = useCallback(async () => {
+    if (!tripId) {
+      setIsLoading(false);
+      setLoadError('Choose a trip before viewing expenses.');
+      return;
+    }
 
-  const loadSettleUp = useCallback(() => {
-    if (!tripId) return;
-    api.expenses
-      .settleUp(tripId)
-      .then((report) => setSettleUpReport(report))
-      .catch(() => setSettleUpReport(null));
+    setIsLoading(true);
+    setLoadError(null);
+    try {
+      const [data, report] = await Promise.all([
+        api.expenses.list(tripId),
+        api.expenses.settleUp(tripId),
+      ]);
+      const mapped: ExpenseItem[] = data.map((expense) => ({
+        id: expense.id,
+        paidBy: expense.paid_by,
+        amount: expense.amount,
+        desc: expense.description,
+        category: expense.category || 'activity',
+        splitBetween: expense.split_between || [],
+      }));
+      setExpenses(mapped);
+      setSettleUpReport(report);
+    } catch (error: unknown) {
+      setLoadError(
+        error instanceof Error
+          ? error.message
+          : 'Could not load expenses and settle-up details.',
+      );
+    } finally {
+      setIsLoading(false);
+    }
   }, [tripId]);
 
   useEffect(() => {
-    loadExpenses();
-    loadSettleUp();
-  }, [loadExpenses, loadSettleUp]);
+    void loadExpenseData();
+  }, [loadExpenseData]);
 
   const total = expenses.reduce((s, e) => s + e.amount, 0);
   const perPerson = members.length > 0 ? total / members.length : 0;
@@ -91,9 +105,10 @@ export default function CostsPage({
       category: expense.category || 'activity',
       split_between: expense.splitBetween || members.map((m) => m.id),
     });
-    loadExpenses();
-    loadSettleUp();
+    await loadExpenseData();
   };
+
+  const canAddExpense = members.length > 0 && !isLoading && loadError === null;
 
   return (
     <div style={{ width: '100%', maxWidth: 700, margin: '0 auto' }}>
@@ -128,6 +143,8 @@ export default function CostsPage({
         <button
           type="button"
           onClick={() => setIsAddOpen(true)}
+          disabled={!canAddExpense}
+          aria-describedby={members.length === 0 ? 'expense-members-help' : undefined}
           style={{
             display: 'inline-flex',
             alignItems: 'center',
@@ -139,13 +156,55 @@ export default function CostsPage({
             color: '#fff',
             fontSize: 13,
             fontWeight: 500,
-            cursor: 'pointer',
+            cursor: canAddExpense ? 'pointer' : 'not-allowed',
+            opacity: canAddExpense ? 1 : 0.55,
           }}
         >
           <Plus size={15} /> Add Expense
         </button>
       </div>
 
+      {members.length === 0 && (
+        <p
+          id="expense-members-help"
+          role="status"
+          className="mb-4 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900"
+        >
+          Add at least one trip member before logging a shared expense.
+        </p>
+      )}
+
+      {isLoading && (
+        <div
+          role="status"
+          className="mb-5 flex items-center justify-center gap-2 rounded-xl border border-stone-200 bg-white px-4 py-10 text-sm text-stone-600"
+        >
+          <Loader2 aria-hidden="true" className="animate-spin" size={18} />
+          Loading expenses and settle-up details…
+        </div>
+      )}
+
+      {!isLoading && loadError && (
+        <div
+          role="alert"
+          className="mb-5 flex flex-wrap items-center gap-3 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-900"
+        >
+          <AlertTriangle aria-hidden="true" size={18} />
+          <span className="min-w-0 flex-1">
+            {loadError}
+          </span>
+          <button
+            type="button"
+            onClick={() => void loadExpenseData()}
+            className="inline-flex items-center gap-1.5 rounded-md border border-red-300 bg-white px-3 py-1.5 font-semibold text-red-900 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-red-700"
+          >
+            <RefreshCw aria-hidden="true" size={14} /> Retry
+          </button>
+        </div>
+      )}
+
+      {!isLoading && !loadError && (
+        <>
       {/* Metrics Card */}
       <div
         style={{
@@ -245,6 +304,7 @@ export default function CostsPage({
         <button
           type="button"
           onClick={() => setIsAddOpen(true)}
+          disabled={!canAddExpense}
           style={{
             width: '100%',
             padding: '12px 16px',
@@ -255,7 +315,8 @@ export default function CostsPage({
             color: PINE,
             fontSize: 13,
             fontWeight: 600,
-            cursor: 'pointer',
+            cursor: canAddExpense ? 'pointer' : 'not-allowed',
+            opacity: canAddExpense ? 1 : 0.55,
             border: 'none',
             background: 'transparent',
             borderTop: `1px solid ${BORDER}`,
@@ -287,9 +348,15 @@ export default function CostsPage({
           Member Net Balances
         </span>
         <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-          {balances.map((b) => (
+          {balances.length === 0 ? (
+            <p style={{ color: MUTED, fontSize: 13, margin: 0 }}>
+              {expenses.length === 0
+                ? 'Balances will appear after the first expense is logged.'
+                : 'No member balance details are available yet.'}
+            </p>
+          ) : balances.map((b) => (
             <div
-              key={b.name}
+              key={b.id}
               style={{
                 display: 'flex',
                 justifyContent: 'space-between',
@@ -316,8 +383,8 @@ export default function CostsPage({
                 }}
               >
                 {b.net >= 0
-                  ? `+is owed $${b.net.toFixed(2)}`
-                  : `-owes $${Math.abs(b.net).toFixed(2)}`}
+                  ? `Is owed $${b.net.toFixed(2)}`
+                  : `Owes $${Math.abs(b.net).toFixed(2)}`}
               </span>
             </div>
           ))}
@@ -347,7 +414,20 @@ export default function CostsPage({
           </span>
         </div>
 
-        {transfers.length === 0 ? (
+        {expenses.length === 0 ? (
+          <div
+            style={{
+              padding: '16px',
+              borderRadius: 8,
+              background: '#FAF6EE',
+              fontSize: 13,
+              color: MUTED,
+            }}
+          >
+            No transfers to calculate yet. Log an expense to create the first
+            settle-up summary.
+          </div>
+        ) : transfers.length === 0 ? (
           <div
             style={{
               padding: '16px',
@@ -408,6 +488,8 @@ export default function CostsPage({
           </div>
         )}
       </div>
+        </>
+      )}
 
       <AddExpenseModal
         isOpen={isAddOpen}

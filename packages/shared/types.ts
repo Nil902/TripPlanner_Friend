@@ -15,6 +15,9 @@ export type TripStatus =
   | "completed"
   | "flagged";
 
+// Date-based travel progress; separate from the persisted planning/moderation status.
+export type TripLifecycleStatus = "upcoming" | "in_progress" | "completed";
+
 export type ValidationStatus = "valid" | "invalid" | "partial";
 
 export type DisruptionType =
@@ -31,6 +34,7 @@ export interface Trip {
   end_date: string; // ISO 8601 date: YYYY-MM-DD
   creator_id: string;
   status: TripStatus;
+  lifecycle_status?: TripLifecycleStatus; // Read-only, UTC dates; end date inclusive
   member_ids: string[];
   created_at: string; // ISO 8601 datetime
 }
@@ -272,4 +276,3 @@ export interface TripPermissions {
 }
 
 export type TripPermissionsResponse = TripPermissions;
-

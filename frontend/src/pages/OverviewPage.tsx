@@ -30,6 +30,9 @@ import Avatar from '../components/Avatar';
 import { PrimaryButton, SecondaryButton } from '../components/Button';
 
 import { api } from '../lib/api';
+import TripStatusBadge from '../components/TripStatusBadge';
+import { getTripLifecycleDescription, getTripLifecycleStatus } from '../lib/tripLifecycle';
+import { useToday } from '../lib/useToday';
 
 const DESTINATION_SUGGESTIONS: Record<string, Array<{ name: string; category: string; cost: number }>> = {
   lisbon: [
@@ -88,6 +91,7 @@ export default function OverviewPage({
   isCreator = true,
   onOpenAdmin,
 }: OverviewPageProps) {
+  const today = useToday();
   const [copied, setCopied] = useState(false);
   const [copiedLink, setCopiedLink] = useState(false);
   const [copiedQR, setCopiedQR] = useState(false);
@@ -438,6 +442,11 @@ export default function OverviewPage({
           >
             <Calendar size={15} /> {trip.start_date} – {trip.end_date}
           </p>
+          <div className="mt-3 flex flex-wrap items-center gap-2">
+            <TripStatusBadge status={getTripLifecycleStatus(trip, today)} />
+            <span className="text-sm text-[#595347]">{getTripLifecycleDescription(trip, today)}</span>
+            {trip.status === 'flagged' && <span className="text-sm text-[#8E4726]">Flagged for review</span>}
+          </div>
         </div>
 
         <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>

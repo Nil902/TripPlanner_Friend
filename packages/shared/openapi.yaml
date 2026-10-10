@@ -644,6 +644,14 @@ components:
         status:
           type: string
           enum: [collecting_constraints, planned, in_progress, completed]
+        lifecycle_status:
+          type: string
+          readOnly: true
+          enum: [upcoming, in_progress, completed]
+          description: >-
+            Date-based travel progress using the current UTC date. Start and end
+            dates are inclusive. Explicitly completed trips remain completed.
+            Computed when read, without changing planning status or permissions.
         member_ids:
           type: array
           items:

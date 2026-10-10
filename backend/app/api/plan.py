@@ -127,8 +127,9 @@ async def generate_plan(
             },
         ) from exc
 
-    # Update trip status
-    trip.status = TripStatus.PLANNED
+    # Planning must not reopen a finished trip or erase moderation/travel state.
+    if trip.status == TripStatus.COLLECTING_CONSTRAINTS:
+        trip.status = TripStatus.PLANNED
     session.add(trip)
     session.commit()
 
@@ -262,7 +263,8 @@ def add_plan_item(
         session.commit()
         session.refresh(plan)
 
-        trip.status = TripStatus.PLANNED
+        if trip.status == TripStatus.COLLECTING_CONSTRAINTS:
+            trip.status = TripStatus.PLANNED
         session.add(trip)
         session.commit()
 

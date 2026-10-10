@@ -7,8 +7,10 @@ from datetime import UTC, date, datetime
 from enum import StrEnum
 from typing import Any
 
-from pydantic import BaseModel
+from pydantic import BaseModel, computed_field
 from sqlmodel import JSON, Column, Field, SQLModel
+
+from app.core.trip_lifecycle import TripLifecycleStatus, get_trip_lifecycle_status
 
 
 def utc_now() -> datetime:
@@ -78,6 +80,14 @@ class Trip(SQLModel, table=True):
     status: TripStatus = Field(default=TripStatus.COLLECTING_CONSTRAINTS)
     member_ids: list[str] = Field(default_factory=list, sa_column=Column(JSON))
     created_at: datetime = Field(default_factory=utc_now)
+
+    @computed_field  # type: ignore[prop-decorator]
+    @property
+    def lifecycle_status(self) -> TripLifecycleStatus:
+        """Read-only progress evaluated on each response using the UTC date."""
+        return get_trip_lifecycle_status(
+            self.start_date, self.end_date, self.status, utc_now().date()
+        )
 
 
 class Constraint(SQLModel, table=True):

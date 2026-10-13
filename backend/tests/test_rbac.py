@@ -73,14 +73,14 @@ async def test_creator_permissions_and_management():
         assert perm_query_data["is_creator"] is True
         assert perm_query_data["role"] == "creator"
 
-        # 5. Creator checks permissions with X-User-Role: creator header
+        # A role header alone does not authenticate the caller.
         perm_header_resp = await client.get(
             f"/api/v1/trips/{trip_id}/permissions",
             headers={"X-User-Role": "creator"},
         )
         assert perm_header_resp.status_code == 200
-        assert perm_header_resp.json()["can_manage"] is True
-        assert perm_header_resp.json()["role"] == "creator"
+        assert perm_header_resp.json()["can_manage"] is False
+        assert perm_header_resp.json()["role"] == "joiner"
 
         # 6. Creator can update trip with token
         update_resp = await client.put(

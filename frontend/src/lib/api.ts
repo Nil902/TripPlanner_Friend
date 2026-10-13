@@ -13,6 +13,8 @@ import type {
   UpdateExpenseRequest,
   DisruptionEvent,
   AskAgentResponse,
+  SystemHealthResponse,
+  TripPermissionsResponse,
 } from '@shared/types';
 
 const BASE =
@@ -120,73 +122,73 @@ async function request<T>(
     init.body = JSON.stringify(body);
   }
 
-  let lastError: unknown;
-  for (let attempt = 0; attempt <= retries; attempt++) {
+  // Retrying a mutation after a lost response can create duplicate trips,
+  // expenses, or plan versions. Only reads are safe to retry automatically.
+  const maxRetries = method === 'GET' ? retries : 0;
+  for (let attempt = 0; attempt <= maxRetries; attempt++) {
+    let res: Response;
     try {
-      const res = await fetch(`${BASE}${path}`, init);
-
-      if (!res.ok) {
-        // Don't retry 4xx client errors
-        if (res.status >= 400 && res.status < 500) {
-          let message = `Request failed: ${res.status} ${res.statusText}`;
-          try {
-            const json = (await res.json()) as {
-              detail?:
-                | string
-                | { message?: string; code?: string }
-                | Array<{ msg?: string; message?: string }>;
-              message?: string;
-            };
-            if (typeof json.detail === 'string') {
-              message = json.detail;
-            } else if (Array.isArray(json.detail)) {
-              message = json.detail
-                .map((d) => d.msg || d.message || JSON.stringify(d))
-                .join(', ');
-            } else if (json.detail && typeof json.detail.message === 'string') {
-              message = json.detail.message;
-            } else if (typeof json.message === 'string') {
-              message = json.message;
-            }
-          } catch {
-            // response body is not JSON, keep default message
-          }
-          throw new Error(message);
-        }
-
-        // 5xx: eligible for retry
-        const errMsg = `Request failed: ${res.status} ${res.statusText}`;
-        lastError = new Error(errMsg);
-        if (attempt < retries) {
-          await new Promise((resolve) => setTimeout(resolve, 2 ** attempt * 500));
-          continue;
-        }
-        throw lastError;
-      }
-
-      // 204 No Content and 205 Reset Content have empty bodies.
-      if (res.status === 204 || res.status === 205) {
-        return {} as T;
-      }
-
-      const contentType = res.headers?.get('content-type') ?? '';
-      if (!contentType.includes('application/json')) {
-        return {} as T;
-      }
-
-      return res.json() as Promise<T>;
+      res = await fetch(`${BASE}${path}`, init);
     } catch (err) {
-      // AbortError should never retry
-      if (err instanceof Error && err.name === 'AbortError') throw err;
-      lastError = err;
-      if (attempt < retries) {
+      if (signal?.aborted || (typeof err === 'object' && err !== null && 'name' in err && err.name === 'AbortError')) {
+        throw err;
+      }
+      if (attempt >= maxRetries) throw err;
+      await new Promise((resolve) => setTimeout(resolve, 2 ** attempt * 500));
+      continue;
+    }
+
+    if (!res.ok) {
+      // Don't retry 4xx client errors
+      if (res.status >= 400 && res.status < 500) {
+        let message = `Request failed: ${res.status} ${res.statusText}`;
+        try {
+          const json = (await res.json()) as {
+            detail?:
+              | string
+              | { message?: string; code?: string }
+              | Array<{ msg?: string; message?: string }>;
+            message?: string;
+          };
+          if (typeof json.detail === 'string') {
+            message = json.detail;
+          } else if (Array.isArray(json.detail)) {
+            message = json.detail
+              .map((d) => d.msg || d.message || JSON.stringify(d))
+              .join(', ');
+          } else if (json.detail && typeof json.detail.message === 'string') {
+            message = json.detail.message;
+          } else if (typeof json.message === 'string') {
+            message = json.message;
+          }
+        } catch {
+          // response body is not JSON, keep default message
+        }
+        throw new Error(message);
+      }
+
+      // Retry transient failures on reads only.
+      const errMsg = `Request failed: ${res.status} ${res.statusText}`;
+      if (res.status >= 500 && attempt < maxRetries) {
         await new Promise((resolve) => setTimeout(resolve, 2 ** attempt * 500));
         continue;
       }
-      throw err;
+      throw new Error(errMsg);
     }
+
+    // 204 No Content and 205 Reset Content have empty bodies.
+    if (res.status === 204 || res.status === 205) {
+      return {} as T;
+    }
+
+    const contentType = res.headers?.get('content-type') ?? '';
+    if (!contentType.includes('application/json')) {
+      return {} as T;
+    }
+
+    return res.json() as Promise<T>;
   }
-  throw lastError;
+  throw new Error('Request failed after retries.');
 }
 
 export const api = {
@@ -207,6 +209,10 @@ export const api = {
   },
 
   // High-level API domain methods
+  system: {
+    health: () => api.get<SystemHealthResponse>('/healthz'),
+    readiness: () => api.get<SystemHealthResponse>('/readyz'),
+  },
   auth: {
     signup: (data: { email: string; password: string; name: string }) =>
       api.post<{ token: string; user: { id: string; email: string; name: string } }>(
@@ -239,7 +245,7 @@ export const api = {
         `/api/v1/trips/${tripId}/members`,
       ),
     getPermissions: (tripId: string, userId?: string) =>
-      api.get<{ can_manage: boolean; is_creator: boolean; role: string }>(
+      api.get<TripPermissionsResponse>(
         `/api/v1/trips/${tripId}/permissions${userId ? `?user_id=${userId}` : ''}`,
       ),
   },
@@ -374,4 +380,3 @@ export interface AdminSystemHealthNode {
   detail: string;
   latency_ms?: number;
 }
-

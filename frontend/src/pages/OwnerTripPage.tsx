@@ -28,6 +28,7 @@ import {
   Member,
 } from '../lib/constants';
 import Avatar from '../components/Avatar';
+import TripProgressPanel from '../components/TripProgressPanel';
 import { PrimaryButton, SecondaryButton } from '../components/Button';
 import { api } from '../lib/api';
 import { useResponsive } from '../lib/useResponsive';
@@ -718,18 +719,22 @@ function DangerZone({ trip, onUpdateTrip, onDeleteTrip }: DangerZoneProps) {
   const [confirmingDelete, setConfirmingDelete] = useState(false);
   const [closing, setClosing] = useState(false);
   const [deleting, setDeleting] = useState(false);
+  const [closeError, setCloseError] = useState<string | null>(null);
 
   const isClosed = trip.status === 'completed';
 
   const handleCloseTrip = async () => {
     setClosing(true);
+    setCloseError(null);
     try {
       const updated = await api.trips.update(trip.id, { status: 'completed' });
+      if (updated.status !== 'completed') {
+        throw new Error('Trip completion was not confirmed. Please try again.');
+      }
       onUpdateTrip({ ...trip, status: updated.status });
       setConfirmingClose(false);
-    } catch {
-      onUpdateTrip({ ...trip, status: 'completed' });
-      setConfirmingClose(false);
+    } catch (err: unknown) {
+      setCloseError(err instanceof Error ? err.message : 'Unable to finish the trip. Please try again.');
     } finally {
       setClosing(false);
     }
@@ -763,15 +768,17 @@ function DangerZone({ trip, onUpdateTrip, onDeleteTrip }: DangerZoneProps) {
             <AlertTriangle size={18} color={RED} style={{ flexShrink: 0, marginTop: 2 }} />
             <div>
               <p style={{ fontSize: 14, fontWeight: 600, margin: '0 0 4px', color: INK }}>
-                {isClosed ? 'Trip is Closed' : 'Close this trip'}
+                {isClosed ? 'Trip is completed' : 'Finish this trip'}
               </p>
               <p style={{ fontSize: 13, color: MUTED, margin: 0, lineHeight: 1.5 }}>
                 {isClosed
-                  ? 'This trip is currently marked as completed. Members have read-only access.'
-                  : 'Members will retain read-only access to the final plan and costs. No one will be able to submit new constraints or trigger new agent runs.'}
+                  ? 'This trip is marked as completed. Your itinerary and expenses remain available.'
+                  : 'Mark this trip as completed when you finish traveling. This does not delete its itinerary or expenses or change access permissions.'}
               </p>
             </div>
           </div>
+
+          {closeError && <p role="alert" className="mt-3 text-sm text-red-700">{closeError}</p>}
 
           {!isClosed && (
             <div style={{ marginTop: 14, paddingLeft: 30 }}>
@@ -792,7 +799,7 @@ function DangerZone({ trip, onUpdateTrip, onDeleteTrip }: DangerZoneProps) {
                       cursor: 'pointer',
                     }}
                   >
-                    {closing ? 'Closing...' : 'Yes, close the trip'}
+                    {closing ? 'Saving...' : 'Yes, complete the trip'}
                   </button>
                   <SecondaryButton
                     onClick={() => setConfirmingClose(false)}
@@ -811,7 +818,7 @@ function DangerZone({ trip, onUpdateTrip, onDeleteTrip }: DangerZoneProps) {
                     padding: '6px 14px',
                   }}
                 >
-                  <Trash2 size={14} /> Close trip
+                  <CheckCircle2 size={14} /> Complete trip
                 </SecondaryButton>
               )}
             </div>
@@ -1340,9 +1347,10 @@ export default function OwnerTripPage({
             </div>
           </div>
 
-          {activeTab === 'settings' && (
+          {activeTab === 'settings' && <>
+            <TripProgressPanel key={trip.id} trip={trip} onUpdateTrip={onUpdateTrip} />
             <TripSettings trip={trip} onUpdateTrip={onUpdateTrip} />
-          )}
+          </>}
           {activeTab === 'members' && (
             <Members
               trip={trip}

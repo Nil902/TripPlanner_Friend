@@ -2,10 +2,14 @@
 FastAPI application entry point with lifespan database initialization and registered routers.
 """
 
+import logging
+from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI
+from fastapi import Depends, FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from sqlmodel import Session, select
+from starlette.concurrency import run_in_threadpool
 
 from app.api import (
     admin,
@@ -17,13 +21,16 @@ from app.api import (
     trips,
 )
 from app.core.config import settings
-from app.core.db import init_db
+from app.core.db import get_session, init_db
+from app.models.schema import SystemHealthResponse
+
+logger = logging.getLogger(__name__)
 
 
 @asynccontextmanager
-async def lifespan(app: FastAPI):
+async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # Initialize SQLModel SQLite database tables
-    init_db()
+    await run_in_threadpool(init_db)
     yield
 
 
@@ -62,7 +69,25 @@ app.include_router(rebalance.router)
 app.include_router(expenses.router)
 
 
-@app.get("/healthz", tags=["System"])
-async def check_health():
+@app.get("/healthz", tags=["System"], response_model=SystemHealthResponse)
+async def check_health() -> dict[str, str]:
     """Health check endpoint for container orchestrators and CI verification."""
     return {"status": "ok", "version": "1.0.0"}
+
+
+@app.get("/readyz", tags=["System"], response_model=SystemHealthResponse)
+def check_readiness(session: Session = Depends(get_session)) -> dict[str, str]:
+    """Report whether requests can reach the database, without leaking details."""
+    try:
+        session.exec(select(1)).first()
+    except Exception as exc:
+        session.rollback()
+        logger.error("Database readiness check failed: %s", type(exc).__name__)
+        raise HTTPException(
+            status_code=503,
+            detail={
+                "code": "DATABASE_UNAVAILABLE",
+                "message": "The service is temporarily unavailable. Please try again.",
+            },
+        ) from exc
+    return {"status": "ready", "version": "1.0.0"}

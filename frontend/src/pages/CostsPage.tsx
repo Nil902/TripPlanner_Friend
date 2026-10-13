@@ -26,9 +26,11 @@ export default function CostsPage({
   const [expenses, setExpenses] = useState<ExpenseItem[]>([]);
   const [settleUpReport, setSettleUpReport] = useState<SettleUpReport | null>(null);
   const [isAddOpen, setIsAddOpen] = useState(false);
+  const [loadError, setLoadError] = useState<string | null>(null);
 
   const loadExpenses = useCallback(() => {
     if (!tripId) return;
+    setLoadError(null);
     api.expenses
       .list(tripId)
       .then((data) => {
@@ -44,8 +46,8 @@ export default function CostsPage({
           setExpenses(mapped);
         }
       })
-      .catch(() => {
-        // Fallback
+      .catch((err: unknown) => {
+        setLoadError(err instanceof Error ? err.message : 'Expenses could not be loaded.');
       });
   }, [tripId]);
 
@@ -54,7 +56,10 @@ export default function CostsPage({
     api.expenses
       .settleUp(tripId)
       .then((report) => setSettleUpReport(report))
-      .catch(() => setSettleUpReport(null));
+      .catch((err: unknown) => {
+        setSettleUpReport(null);
+        setLoadError(err instanceof Error ? err.message : 'Balances could not be loaded.');
+      });
   }, [tripId]);
 
   useEffect(() => {
@@ -84,22 +89,25 @@ export default function CostsPage({
   };
 
   const handleAddExpense = async (expense: ExpenseItem) => {
-    try {
-      await api.expenses.create(tripId, {
+    await api.expenses.create(tripId, {
         paid_by: expense.paidBy,
         amount: expense.amount,
         description: expense.desc,
         category: expense.category || 'activity',
         split_between: expense.splitBetween || members.map((m) => m.id),
-      });
-      loadExpenses();
-    } catch {
-      setExpenses((prev) => [...prev, expense]);
-    }
+    });
+    loadExpenses();
+    loadSettleUp();
   };
 
   return (
     <div style={{ width: '100%', maxWidth: 700, margin: '0 auto' }}>
+      {loadError && (
+        <div role="alert" className="mb-4 rounded-lg border border-[#C1683F] bg-[#FBF0E8] p-3 text-sm text-[#C1683F]">
+          <p>{loadError}</p>
+          <button type="button" className="mt-2 underline focus-visible:outline-2" onClick={() => { loadExpenses(); loadSettleUp(); }}>Retry</button>
+        </div>
+      )}
       {/* Title & Summary banner */}
       <div
         style={{

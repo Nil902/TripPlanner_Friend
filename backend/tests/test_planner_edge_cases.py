@@ -56,10 +56,9 @@ def test_agent_planner_max_iterations_and_constraint_relaxation():
         plan_response = AgentPlanner.generate_plan(session, trip, [constraint])
 
         assert plan_response.trip_id == trip.id
-        assert plan_response.validation_status in (
-            ValidationStatus.PARTIAL,
-            ValidationStatus.VALID,
-        )
+        # The selected fixture also contains a closed-hours visit. Budget
+        # relaxation must not hide that hard scheduling failure.
+        assert plan_response.validation_status == ValidationStatus.INVALID
         assert any(
             "Reached maximum iterations (5)" in note for note in plan_response.notes
         )

@@ -63,19 +63,7 @@ export default function CreateTripModal({
       });
       onClose();
     } catch (err: unknown) {
-      // Fallback: create locally if backend is temporarily unreachable
-      const fallbackTrip: TripSummary = {
-        id: `trip-${Date.now().toString().slice(-4)}`,
-        title: title.trim(),
-        destination: destination.trim(),
-        start_date: startDate,
-        end_date: endDate,
-        creator_id: creatorId || 'alice',
-        status: 'collecting_constraints',
-        member_ids: [creatorId || 'alice'],
-      };
-      onCreated(fallbackTrip);
-      onClose();
+      setError(err instanceof Error ? err.message : 'Trip could not be created. Please try again.');
     } finally {
       setIsLoading(false);
     }
@@ -170,6 +158,7 @@ export default function CreateTripModal({
 
         {error && (
           <div
+            role="alert"
             style={{
               margin: '16px 24px 0',
               padding: '10px 14px',

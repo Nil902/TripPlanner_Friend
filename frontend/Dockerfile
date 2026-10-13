@@ -5,12 +5,11 @@ WORKDIR /app
 
 # Copy shared package for TypeScript type references
 COPY packages/shared /app/packages/shared
-COPY packages/shared /packages/shared
 
 # Install dependencies
 WORKDIR /app/frontend
 COPY frontend/package*.json ./
-RUN npm install
+RUN npm ci
 
 # Build production bundle
 COPY frontend/ ./

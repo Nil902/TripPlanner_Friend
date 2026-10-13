@@ -13,7 +13,7 @@ from typing import Any
 
 from sqlmodel import Session, SQLModel, create_engine
 
-from app.core.db import init_db
+from app.core.config import settings
 from app.models.schema import (
     Constraint,
     DisruptionEvent,
@@ -473,11 +473,14 @@ def run_evaluation_suite() -> dict[str, Any]:
 
 
 if __name__ == "__main__":
-    init_db()
+    # CLI evaluation uses only its own in-memory database and deterministic
+    # providers. It must not seed the configured application DB or call APIs.
+    settings.GEMINI_API_KEY = ""
+    settings.GOOGLE_MAPS_API_KEY = ""
     summary = run_evaluation_suite()
     if summary["agent_rate"] < 90.0:
         print("Evaluation benchmark FAILED: Agent pass rate below 90% threshold.")
         sys.exit(1)
     else:
-        print("Evaluation benchmark PASSED: Agent meets production quality standards.")
+        print("Evaluation benchmark PASSED: Deterministic scenario threshold met.")
         sys.exit(0)

@@ -174,6 +174,11 @@ class Expense(SQLModel, table=True):
 # ==============================================================================
 
 
+class SystemHealthResponse(BaseModel):
+    status: str
+    version: str
+
+
 # --- Auth ---
 class SignupRequest(BaseModel):
     email: str

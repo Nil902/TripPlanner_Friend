@@ -17,6 +17,9 @@ dependencies = [
     "httpx>=0.27.0",
     "python-dotenv>=1.0.1",
     "alembic>=1.13.0",
+    "Mako>=1.4.2",
+    "psycopg2-binary>=2.9.9",
+    "redis>=5.0.0",
 ]
 
 [project.optional-dependencies]

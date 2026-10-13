@@ -8,6 +8,7 @@ import re
 import uuid
 from datetime import datetime
 
+from fastapi import HTTPException
 from sqlmodel import Session, col, select
 
 from app.core.config import settings
@@ -79,13 +80,22 @@ class AgentPlanner:
         candidate_places = get_or_create_places_for_destination(
             session, trip.destination
         )
+        if not candidate_places:
+            raise HTTPException(
+                status_code=503,
+                detail={
+                    "code": "VENUE_DATA_UNAVAILABLE",
+                    "message": "Venue data is unavailable for this destination. Please try again later or add stops manually.",
+                },
+            )
 
         # Aggregate constraints
         must_avoids = set()
         must_sees = []
         for c in constraints:
             for avoid in c.must_avoid:
-                must_avoids.add(avoid.lower().strip())
+                if avoid.strip():
+                    must_avoids.add(avoid.lower().strip())
             for see in c.must_see:
                 must_sees.append(see.lower().strip())
 
@@ -99,7 +109,13 @@ class AgentPlanner:
             )
         ]
         if not usable_places:
-            usable_places = candidate_places
+            raise HTTPException(
+                status_code=422,
+                detail={
+                    "code": "NO_SAFE_VENUES",
+                    "message": "No venues match the group exclusions. Update your preferences or destination.",
+                },
+            )
 
         # 2. Iterative Propose-Validate Loop
         notes: list[str] = []
@@ -206,16 +222,25 @@ class AgentPlanner:
             ]
             if len(relaxed_errors) < best_issues_count:
                 best_days = relaxed_days
-            # Only mark PARTIAL if errors remain after relaxation; otherwise the plan is VALID
-            status = (
-                ValidationStatus.VALID
-                if not relaxed_errors
-                else ValidationStatus.PARTIAL
-            )
             notes.append(
                 f"Reached maximum iterations ({cls.MAX_ITERATIONS}). Applied Section 9.2 Constraint Relaxation: "
                 "Relaxed daily budget cap by 15% to preserve must-see attractions without dropping key venues."
             )
+
+        # Classify the schedule actually selected, against the original budget.
+        # Relaxation must never hide an unresolved scheduling error or advertise
+        # an over-budget itinerary as strictly valid.
+        final_issues = (
+            check_budget(best_days, constraints, num_members=len(constraints))
+            + check_travel_time(best_days)
+            + check_open_hours(best_days)
+        )
+        if any(i.severity == "error" and i.type != "budget" for i in final_issues):
+            status = ValidationStatus.INVALID
+        elif any(i.severity == "error" for i in final_issues):
+            status = ValidationStatus.PARTIAL
+        else:
+            status = ValidationStatus.VALID
 
         # 4. Persist Plan & PlanItems in Database
         existing_plans = session.exec(
@@ -234,8 +259,7 @@ class AgentPlanner:
             created_at=utc_now(),
         )
         session.add(new_plan)
-        session.commit()
-        session.refresh(new_plan)
+        session.flush()
 
         # Persist items
         persisted_days: list[PlanDayResponse] = []
@@ -655,8 +679,7 @@ class AgentPlanner:
             created_at=utc_now(),
         )
         session.add(new_plan)
-        session.commit()
-        session.refresh(new_plan)
+        session.flush()
 
         persisted_days: list[PlanDayResponse] = []
         for d in refined_days:

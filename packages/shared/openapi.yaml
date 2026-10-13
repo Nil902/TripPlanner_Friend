@@ -1,1222 +1,2174 @@
 openapi: 3.1.0
 info:
-  title: Autonomous Travel & Group Itinerary Coordinator API
-  description: API contract for group constraint aggregation, itinerary synthesis, dynamic disruption rebalancing, and expense settle-up.
+  title: Autonomous Travel & Group Itinerary Coordinator
+  description: Agentic planning, validation, dynamic rebalancing, and expense settle-up.
   version: 1.0.0
-
-servers:
-  - url: http://localhost:8000
-    description: Local development server
-
 paths:
-  /healthz:
-    get:
-      summary: Healthcheck
-      operationId: checkHealth
+  /api/v1/auth/signup:
+    post:
+      tags:
+      - Authentication
+      summary: Signup
+      description: Register a new user account with email and password.
+      operationId: signup_api_v1_auth_signup_post
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SignupRequest'
+        required: true
       responses:
-        "200":
-          description: System is healthy
+        '201':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuthResponse'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /api/v1/auth/login:
+    post:
+      tags:
+      - Authentication
+      summary: Login
+      description: Authenticate user credentials and return bearer token.
+      operationId: login_api_v1_auth_login_post
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/LoginRequest'
+        required: true
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuthResponse'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /api/v1/auth/me:
+    get:
+      tags:
+      - Authentication
+      summary: Get Me
+      description: Retrieve currently authenticated user profile.
+      operationId: get_me_api_v1_auth_me_get
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UserResponse'
+      security:
+      - HTTPBearer: []
+  /api/v1/admin/login:
+    post:
+      tags:
+      - Platform Administration
+      summary: Admin Login
+      description: Authenticate administrator credentials and return bearer token.
+      operationId: admin_login_api_v1_admin_login_post
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/LoginRequest'
+        required: true
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuthResponse'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /api/v1/admin/overview:
+    get:
+      tags:
+      - Platform Administration
+      summary: Get Admin Overview
+      description: Retrieve platform KPI metrics.
+      operationId: get_admin_overview_api_v1_admin_overview_get
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema: {}
+      security:
+      - HTTPBearer: []
+  /api/v1/admin/trips:
+    get:
+      tags:
+      - Platform Administration
+      summary: List Admin Trips
+      description: List all trips on the platform with creator details and member
+        counts.
+      operationId: list_admin_trips_api_v1_admin_trips_get
+      security:
+      - HTTPBearer: []
+      parameters:
+      - name: query
+        in: query
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Query
+      - name: status_filter
+        in: query
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Status Filter
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/AdminTripItem'
+                title: Response List Admin Trips Api V1 Admin Trips Get
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /api/v1/admin/trips/{trip_id}/status:
+    patch:
+      tags:
+      - Platform Administration
+      summary: Update Trip Status
+      description: Update trip moderation status (active, flagged, closed).
+      operationId: update_trip_status_api_v1_admin_trips__trip_id__status_patch
+      security:
+      - HTTPBearer: []
+      parameters:
+      - name: trip_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Trip Id
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateTripStatusRequest'
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema: {}
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /api/v1/admin/trips/{trip_id}:
+    delete:
+      tags:
+      - Platform Administration
+      summary: Delete Trip Admin
+      description: Administrative force deletion of a trip with full cascade.
+      operationId: delete_trip_admin_api_v1_admin_trips__trip_id__delete
+      security:
+      - HTTPBearer: []
+      parameters:
+      - name: trip_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Trip Id
+      responses:
+        '200':
+          description: Successful Response
           content:
             application/json:
               schema:
                 type: object
-                properties:
-                  status:
-                    type: string
-                    example: ok
-                  version:
-                    type: string
-                    example: 1.0.0
-
-  /api/v1/auth/signup:
-    post:
-      summary: Register a new user account
-      operationId: signup
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              $ref: "#/components/schemas/SignupRequest"
-      responses:
-        "201":
-          description: User registered successfully
+                additionalProperties:
+                  type: string
+                title: Response Delete Trip Admin Api V1 Admin Trips  Trip Id  Delete
+        '422':
+          description: Validation Error
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/AuthResponse"
-
-  /api/v1/auth/login:
-    post:
-      summary: Authenticate user credentials
-      operationId: login
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              $ref: "#/components/schemas/LoginRequest"
-      responses:
-        "200":
-          description: User authenticated successfully
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/AuthResponse"
-
-  /api/v1/auth/me:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /api/v1/admin/users:
     get:
-      summary: Get current authenticated user profile
-      operationId: getMe
-      security:
-        - BearerAuth: []
+      tags:
+      - Platform Administration
+      summary: List Admin Users
+      description: List registered user accounts and trip statistics.
+      operationId: list_admin_users_api_v1_admin_users_get
       responses:
-        "200":
-          description: Authenticated user details
+        '200':
+          description: Successful Response
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/UserResponse"
-
+                items:
+                  $ref: '#/components/schemas/AdminUserItem'
+                type: array
+                title: Response List Admin Users Api V1 Admin Users Get
+      security:
+      - HTTPBearer: []
+  /api/v1/admin/api-usage:
+    get:
+      tags:
+      - Platform Administration
+      summary: Get Api Usage
+      description: External API consumption and quota tracking.
+      operationId: get_api_usage_api_v1_admin_api_usage_get
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                items:
+                  $ref: '#/components/schemas/ApiUsageItem'
+                type: array
+                title: Response Get Api Usage Api V1 Admin Api Usage Get
+      security:
+      - HTTPBearer: []
+  /api/v1/admin/system-health:
+    get:
+      tags:
+      - Platform Administration
+      summary: Get System Health
+      description: Live system diagnostics — probes DB and Redis; Nginx/LLM are inferred.
+      operationId: get_system_health_api_v1_admin_system_health_get
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                items:
+                  $ref: '#/components/schemas/SystemHealthNode'
+                type: array
+                title: Response Get System Health Api V1 Admin System Health Get
+      security:
+      - HTTPBearer: []
   /api/v1/trips:
     get:
-      summary: List all trips
-      operationId: listTrips
+      tags:
+      - Trips
+      summary: List Trips
+      description: List all trips.
+      operationId: list_trips_api_v1_trips_get
       responses:
-        "200":
-          description: List of trips
+        '200':
+          description: Successful Response
           content:
             application/json:
               schema:
-                type: array
                 items:
-                  $ref: "#/components/schemas/Trip"
+                  $ref: '#/components/schemas/Trip'
+                type: array
+                title: Response List Trips Api V1 Trips Get
     post:
-      summary: Create a new trip
-      operationId: createTrip
+      tags:
+      - Trips
+      summary: Create Trip
+      description: Create a new trip room.
+      operationId: create_trip_api_v1_trips_post
       requestBody:
-        required: true
         content:
           application/json:
             schema:
-              $ref: "#/components/schemas/CreateTripRequest"
+              $ref: '#/components/schemas/CreateTripRequest'
+        required: true
       responses:
-        "201":
-          description: Trip successfully created
+        '201':
+          description: Successful Response
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/Trip"
-
+                $ref: '#/components/schemas/Trip'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
   /api/v1/trips/{trip_id}:
     get:
-      summary: Get trip details
-      operationId: getTrip
+      tags:
+      - Trips
+      summary: Get Trip
+      description: Retrieve trip details by ID.
+      operationId: get_trip_api_v1_trips__trip_id__get
       parameters:
-        - name: trip_id
-          in: path
-          required: true
-          schema:
-            type: string
+      - name: trip_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Trip Id
       responses:
-        "200":
-          description: Trip details retrieved
+        '200':
+          description: Successful Response
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/Trip"
-        "404":
-          description: Trip not found
+                $ref: '#/components/schemas/Trip'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
     put:
-      summary: Update trip properties
-      operationId: updateTrip
+      tags:
+      - Trips
+      summary: Update Trip
+      description: Update trip properties (destination, dates, title, status, members).
+        Allows all edits.
+      operationId: update_trip_api_v1_trips__trip_id__put
+      security:
+      - HTTPBearer: []
       parameters:
-        - name: trip_id
-          in: path
-          required: true
-          schema:
-            type: string
+      - name: trip_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Trip Id
+      - name: X-User-Role
+        in: header
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: X-User-Role
       requestBody:
         required: true
         content:
           application/json:
             schema:
-              $ref: "#/components/schemas/UpdateTripRequest"
+              $ref: '#/components/schemas/UpdateTripRequest'
       responses:
-        "200":
-          description: Updated trip details
+        '200':
+          description: Successful Response
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/Trip"
-        "404":
-          description: Trip not found
+                $ref: '#/components/schemas/Trip'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
     delete:
-      summary: Delete a trip
-      operationId: deleteTrip
+      tags:
+      - Trips
+      summary: Delete Trip
+      description: Delete a trip.
+      operationId: delete_trip_api_v1_trips__trip_id__delete
+      security:
+      - HTTPBearer: []
       parameters:
-        - name: trip_id
-          in: path
-          required: true
-          schema:
-            type: string
+      - name: trip_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Trip Id
+      - name: X-User-Role
+        in: header
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: X-User-Role
       responses:
-        "204":
-          description: Trip deleted successfully
-        "404":
-          description: Trip not found
-
+        '204':
+          description: Successful Response
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
   /api/v1/trips/{trip_id}/join:
     post:
-      summary: Join a trip room as a participant
-      operationId: joinTrip
+      tags:
+      - Trips
+      summary: Join Trip
+      description: Join a trip room as a participant without authentication.
+      operationId: join_trip_api_v1_trips__trip_id__join_post
       parameters:
-        - name: trip_id
-          in: path
-          required: true
-          schema:
-            type: string
+      - name: trip_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Trip Id
       requestBody:
         required: true
         content:
           application/json:
             schema:
-              $ref: "#/components/schemas/JoinTripRequest"
+              $ref: '#/components/schemas/JoinTripRequest'
       responses:
-        "200":
-          description: Member successfully joined
+        '200':
+          description: Successful Response
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/Member"
-        "404":
-          description: Trip not found
-
+                $ref: '#/components/schemas/MemberResponse'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
   /api/v1/trips/{trip_id}/members:
     get:
-      summary: Retrieve all trip members
-      operationId: getTripMembers
+      tags:
+      - Trips
+      summary: Get Trip Members
+      description: Retrieve all members of a trip with roles, names, initials, and
+        submission status.
+      operationId: get_trip_members_api_v1_trips__trip_id__members_get
       parameters:
-        - name: trip_id
-          in: path
-          required: true
-          schema:
-            type: string
+      - name: trip_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Trip Id
       responses:
-        "200":
-          description: List of members
+        '200':
+          description: Successful Response
           content:
             application/json:
               schema:
                 type: array
                 items:
-                  $ref: "#/components/schemas/Member"
-        "404":
-          description: Trip not found
-
+                  $ref: '#/components/schemas/MemberResponse'
+                title: Response Get Trip Members Api V1 Trips  Trip Id  Members Get
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
   /api/v1/trips/{trip_id}/permissions:
     get:
-      summary: Get user trip permissions
-      operationId: getTripPermissions
+      tags:
+      - Trips
+      summary: Get Trip Permissions
+      description: Check effective trip permissions for creator, joiner, or administrator.
+      operationId: get_trip_permissions_api_v1_trips__trip_id__permissions_get
+      security:
+      - HTTPBearer: []
       parameters:
-        - name: trip_id
-          in: path
-          required: true
-          schema:
-            type: string
-        - name: user_id
-          in: query
-          required: false
-          schema:
-            type: string
+      - name: trip_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Trip Id
+      - name: user_id
+        in: query
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: User Id
       responses:
-        "200":
-          description: Trip permissions
+        '200':
+          description: Successful Response
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/TripPermissions"
-        "404":
-          description: Trip not found
-
+                $ref: '#/components/schemas/TripPermissionsResponse'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
   /api/v1/trips/{trip_id}/constraints:
     post:
-      summary: Submit or update participant constraints
-      operationId: submitConstraint
+      tags:
+      - Constraints
+      summary: Submit Constraint
+      description: Submit or update constraints for a trip member.
+      operationId: submit_constraint_api_v1_trips__trip_id__constraints_post
       parameters:
-        - name: trip_id
-          in: path
-          required: true
-          schema:
-            type: string
+      - name: trip_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Trip Id
       requestBody:
         required: true
         content:
           application/json:
             schema:
-              $ref: "#/components/schemas/SubmitConstraintRequest"
+              $ref: '#/components/schemas/SubmitConstraintRequest'
       responses:
-        "200":
-          description: Constraints recorded
+        '200':
+          description: Successful Response
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/Constraint"
+                $ref: '#/components/schemas/Constraint'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
     get:
-      summary: List all participant constraints for a trip
-      operationId: listConstraints
+      tags:
+      - Constraints
+      summary: List Constraints
+      description: List all submitted constraints for a trip.
+      operationId: list_constraints_api_v1_trips__trip_id__constraints_get
       parameters:
-        - name: trip_id
-          in: path
-          required: true
-          schema:
-            type: string
+      - name: trip_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Trip Id
       responses:
-        "200":
-          description: List of constraints
+        '200':
+          description: Successful Response
           content:
             application/json:
               schema:
                 type: array
                 items:
-                  $ref: "#/components/schemas/Constraint"
-
+                  $ref: '#/components/schemas/Constraint'
+                title: Response List Constraints Api V1 Trips  Trip Id  Constraints
+                  Get
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
   /api/v1/trips/{trip_id}/plan:
     post:
-      summary: Trigger agent propose-validate itinerary planning loop
-      operationId: generatePlan
+      tags:
+      - Plan
+      summary: Generate Plan
+      description: Trigger the autonomous agent propose-validate-rebalance planning
+        loop.
+      operationId: generate_plan_api_v1_trips__trip_id__plan_post
       parameters:
-        - name: trip_id
-          in: path
-          required: true
-          schema:
-            type: string
+      - name: trip_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Trip Id
       responses:
-        "200":
-          description: Generated plan with validation status and notes
+        '200':
+          description: Successful Response
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/Plan"
+                $ref: '#/components/schemas/PlanResponse'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
     get:
-      summary: Get the latest generated plan (or specific version)
-      operationId: getPlan
+      tags:
+      - Plan
+      summary: Get Plan
+      description: Get the latest plan or a specific version.
+      operationId: get_plan_api_v1_trips__trip_id__plan_get
       parameters:
-        - name: trip_id
-          in: path
-          required: true
-          schema:
-            type: string
-        - name: version
-          in: query
-          required: false
-          schema:
-            type: integer
-      responses:
-        "200":
-          description: Plan details with day-by-day stops
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/Plan"
-        "404":
-          description: Plan not yet generated
-
-  /api/v1/trips/{trip_id}/plan/items:
-    post:
-      summary: Add a custom plan item to the itinerary
-      operationId: addPlanItem
-      parameters:
-        - name: trip_id
-          in: path
-          required: true
-          schema:
-            type: string
-      requestBody:
+      - name: trip_id
+        in: path
         required: true
-        content:
-          application/json:
-            schema:
-              $ref: "#/components/schemas/CreatePlanItemRequest"
+        schema:
+          type: string
+          title: Trip Id
+      - name: version
+        in: query
+        required: false
+        schema:
+          anyOf:
+          - type: integer
+          - type: 'null'
+          description: Optional specific plan version
+          title: Version
+        description: Optional specific plan version
       responses:
-        "200":
-          description: Plan item created
+        '200':
+          description: Successful Response
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/PlanItem"
-
-  /api/v1/trips/{trip_id}/plan/items/{item_id}:
-    put:
-      summary: Update an existing plan item stop
-      operationId: updatePlanItem
-      parameters:
-        - name: trip_id
-          in: path
-          required: true
-          schema:
-            type: string
-        - name: item_id
-          in: path
-          required: true
-          schema:
-            type: string
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              $ref: "#/components/schemas/UpdatePlanItemRequest"
-      responses:
-        "200":
-          description: Updated plan item details
+                $ref: '#/components/schemas/PlanResponse'
+        '422':
+          description: Validation Error
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/PlanItem"
-        "404":
-          description: Plan item not found
-    delete:
-      summary: Remove a plan item from the itinerary
-      operationId: deletePlanItem
-      parameters:
-        - name: trip_id
-          in: path
-          required: true
-          schema:
-            type: string
-        - name: item_id
-          in: path
-          required: true
-          schema:
-            type: string
-      responses:
-        "204":
-          description: Plan item removed successfully
-        "404":
-          description: Plan item not found
-
-  /api/v1/trips/{trip_id}/plan/validate:
-    post:
-      summary: Run deterministic domain validators on current plan
-      operationId: validatePlan
-      parameters:
-        - name: trip_id
-          in: path
-          required: true
-          schema:
-            type: string
-      responses:
-        "200":
-          description: Validation result with issues list
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/ValidationResult"
-
-  /api/v1/trips/{trip_id}/plan/refine:
-    post:
-      summary: Natural-language itinerary feedback and agent refinement
-      operationId: refinePlan
-      parameters:
-        - name: trip_id
-          in: path
-          required: true
-          schema:
-            type: string
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              $ref: "#/components/schemas/RefinePlanRequest"
-      responses:
-        "200":
-          description: Refined plan version
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/Plan"
-
-  /api/v1/trips/{trip_id}/plan/ask:
-    post:
-      summary: Ask the AI agent a question about the destination or itinerary
-      operationId: askPlanAgent
-      parameters:
-        - name: trip_id
-          in: path
-          required: true
-          schema:
-            type: string
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              $ref: "#/components/schemas/AskAgentRequest"
-      responses:
-        "200":
-          description: Advisory answer from the agent
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/AskAgentResponse"
-
-  /api/v1/trips/{trip_id}/plan/export.ics:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /api/v1/trips/{trip_id}/plan/versions:
     get:
-      summary: Export trip itinerary as an RFC 5545 iCalendar (.ics) file
-      operationId: exportPlanIcs
+      tags:
+      - Plan
+      summary: List Plan Versions
+      description: List all available plan versions for this trip.
+      operationId: list_plan_versions_api_v1_trips__trip_id__plan_versions_get
       parameters:
-        - name: trip_id
-          in: path
-          required: true
-          schema:
-            type: string
-      responses:
-        "200":
-          description: Standard iCalendar file
-          content:
-            text/calendar:
-              schema:
-                type: string
-
-  /api/v1/trips/{trip_id}/rebalance:
-    post:
-      summary: Rebalance itinerary in response to a disruption
-      operationId: rebalancePlan
-      parameters:
-        - name: trip_id
-          in: path
-          required: true
-          schema:
-            type: string
-      requestBody:
+      - name: trip_id
+        in: path
         required: true
-        content:
-          application/json:
-            schema:
-              $ref: "#/components/schemas/DisruptionEvent"
+        schema:
+          type: string
+          title: Trip Id
       responses:
-        "200":
-          description: Newly versioned plan with isolated rebalanced window
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/Plan"
-
-  /api/v1/trips/{trip_id}/expenses:
-    get:
-      summary: List all recorded expenses for a trip
-      operationId: listExpenses
-      parameters:
-        - name: trip_id
-          in: path
-          required: true
-          schema:
-            type: string
-      responses:
-        "200":
-          description: List of expenses
+        '200':
+          description: Successful Response
           content:
             application/json:
               schema:
                 type: array
                 items:
-                  $ref: "#/components/schemas/Expense"
+                  type: object
+                  additionalProperties: true
+                title: Response List Plan Versions Api V1 Trips  Trip Id  Plan Versions
+                  Get
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /api/v1/trips/{trip_id}/plan/items:
     post:
-      summary: Log a group expense
-      operationId: addExpense
+      tags:
+      - Plan
+      summary: Add Plan Item
+      description: Add a custom plan item to the latest plan (Always allow all edits).
+      operationId: add_plan_item_api_v1_trips__trip_id__plan_items_post
       parameters:
-        - name: trip_id
-          in: path
-          required: true
-          schema:
-            type: string
+      - name: trip_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Trip Id
       requestBody:
         required: true
         content:
           application/json:
             schema:
-              $ref: "#/components/schemas/CreateExpenseRequest"
+              $ref: '#/components/schemas/CreatePlanItemRequest'
       responses:
-        "201":
-          description: Expense recorded
+        '200':
+          description: Successful Response
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/Expense"
+                $ref: '#/components/schemas/PlanItemResponse'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /api/v1/trips/{trip_id}/plan/items/{item_id}:
+    put:
+      tags:
+      - Plan
+      summary: Update Plan Item
+      description: Directly edit an existing itinerary stop (Always allow all edits).
+      operationId: update_plan_item_api_v1_trips__trip_id__plan_items__item_id__put
+      parameters:
+      - name: trip_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Trip Id
+      - name: item_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Item Id
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdatePlanItemRequest'
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PlanItemResponse'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+    delete:
+      tags:
+      - Plan
+      summary: Delete Plan Item
+      description: Remove a plan item from the itinerary.
+      operationId: delete_plan_item_api_v1_trips__trip_id__plan_items__item_id__delete
+      parameters:
+      - name: trip_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Trip Id
+      - name: item_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Item Id
+      responses:
+        '204':
+          description: Successful Response
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /api/v1/trips/{trip_id}/plan/validate:
+    post:
+      tags:
+      - Plan
+      summary: Validate Current Plan
+      description: 'Runs deterministic validators (budget, transit, operating hours)
+        on the current plan.
 
+        Powers real-time feedback in manual mode and post-edit validations.'
+      operationId: validate_current_plan_api_v1_trips__trip_id__plan_validate_post
+      parameters:
+      - name: trip_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Trip Id
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ValidationResult'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /api/v1/trips/{trip_id}/plan/refine:
+    post:
+      tags:
+      - Plan
+      summary: Refine Plan
+      description: 'Apply natural-language refinement to the itinerary (e.g. ''Make
+        Day 2 more relaxed'').
+
+        Re-runs proposing/balancing with user instruction and creates a newly versioned
+        Plan.'
+      operationId: refine_plan_api_v1_trips__trip_id__plan_refine_post
+      parameters:
+      - name: trip_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Trip Id
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RefinePlanRequest'
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PlanResponse'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /api/v1/trips/{trip_id}/plan/ask:
+    post:
+      tags:
+      - Plan
+      summary: Ask Agent
+      description: 'Ask the AI agent an open-ended question about the destination
+        or itinerary,
+
+        e.g. ''Which places are the most popular to visit?'' or ''Where is the best
+
+        seafood within our $30 lunch budget?''.
+
+
+        Uses the LLM when configured; falls back to a deterministic recommendation
+
+        otherwise. Answers are advisory only and do not modify the plan.'
+      operationId: ask_agent_api_v1_trips__trip_id__plan_ask_post
+      parameters:
+      - name: trip_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Trip Id
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AskAgentRequest'
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AskAgentResponse'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /api/v1/trips/{trip_id}/plan/export.ics:
+    get:
+      tags:
+      - Plan
+      summary: Export Plan Ics
+      description: 'Export the current trip plan as an RFC 5545 iCalendar (.ics) file
+
+        compatible with Apple Calendar, Google Calendar, and Outlook.'
+      operationId: export_plan_ics_api_v1_trips__trip_id__plan_export_ics_get
+      parameters:
+      - name: trip_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Trip Id
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema: {}
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /api/v1/trips/{trip_id}/rebalance:
+    post:
+      tags:
+      - Rebalance
+      summary: Rebalance Trip
+      description: 'Dynamically rebalances the itinerary in response to a disruption
+
+        (venue closed, flight delay, weather, etc.) by isolating the affected slice
+
+        and preserving plan version history.'
+      operationId: rebalance_trip_api_v1_trips__trip_id__rebalance_post
+      parameters:
+      - name: trip_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Trip Id
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/DisruptionEvent'
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PlanResponse'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /api/v1/trips/{trip_id}/expenses:
+    post:
+      tags:
+      - Expenses
+      summary: Add Expense
+      description: Log a new group expense.
+      operationId: add_expense_api_v1_trips__trip_id__expenses_post
+      parameters:
+      - name: trip_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Trip Id
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateExpenseRequest'
+      responses:
+        '201':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Expense'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+    get:
+      tags:
+      - Expenses
+      summary: List Expenses
+      description: List all recorded expenses for a trip.
+      operationId: list_expenses_api_v1_trips__trip_id__expenses_get
+      parameters:
+      - name: trip_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Trip Id
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Expense'
+                title: Response List Expenses Api V1 Trips  Trip Id  Expenses Get
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
   /api/v1/trips/{trip_id}/expenses/{expense_id}:
     put:
-      summary: Update an existing expense
-      operationId: updateExpense
+      tags:
+      - Expenses
+      summary: Update Expense
+      description: Update an existing expense (Always allow all edits).
+      operationId: update_expense_api_v1_trips__trip_id__expenses__expense_id__put
       parameters:
-        - name: trip_id
-          in: path
-          required: true
-          schema:
-            type: string
-        - name: expense_id
-          in: path
-          required: true
-          schema:
-            type: string
+      - name: trip_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Trip Id
+      - name: expense_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Expense Id
       requestBody:
         required: true
         content:
           application/json:
             schema:
-              $ref: "#/components/schemas/UpdateExpenseRequest"
+              $ref: '#/components/schemas/UpdateExpenseRequest'
       responses:
-        "200":
-          description: Updated expense record
+        '200':
+          description: Successful Response
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/Expense"
-        "404":
-          description: Expense not found
+                $ref: '#/components/schemas/Expense'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
     delete:
-      summary: Delete an expense record
-      operationId: deleteExpense
+      tags:
+      - Expenses
+      summary: Delete Expense
+      description: Delete an expense.
+      operationId: delete_expense_api_v1_trips__trip_id__expenses__expense_id__delete
       parameters:
-        - name: trip_id
-          in: path
-          required: true
-          schema:
-            type: string
-        - name: expense_id
-          in: path
-          required: true
-          schema:
-            type: string
+      - name: trip_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Trip Id
+      - name: expense_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Expense Id
       responses:
-        "204":
-          description: Expense deleted successfully
-        "404":
-          description: Expense not found
-
+        '204':
+          description: Successful Response
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
   /api/v1/trips/{trip_id}/expenses/settle-up:
     get:
-      summary: Calculate greedy settle-up transactions
-      operationId: getSettleUp
+      tags:
+      - Expenses
+      summary: Get Settle Up
+      description: Calculate greedy minimal-transaction debt settlement.
+      operationId: get_settle_up_api_v1_trips__trip_id__expenses_settle_up_get
       parameters:
-        - name: trip_id
-          in: path
-          required: true
-          schema:
-            type: string
+      - name: trip_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Trip Id
       responses:
-        "200":
-          description: Calculated net balances and minimum debt transfers
+        '200':
+          description: Successful Response
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/SettleUpReport"
-
+                $ref: '#/components/schemas/SettleUpReport'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /healthz:
+    get:
+      tags:
+      - System
+      summary: Check Health
+      description: Health check endpoint for container orchestrators and CI verification.
+      operationId: check_health_healthz_get
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SystemHealthResponse'
+  /readyz:
+    get:
+      tags:
+      - System
+      summary: Check Readiness
+      description: Report whether requests can reach the database, without leaking
+        details.
+      operationId: check_readiness_readyz_get
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SystemHealthResponse'
 components:
   schemas:
-    Trip:
-      type: object
-      required:
-        - id
-        - title
-        - destination
-        - start_date
-        - end_date
-        - creator_id
-        - status
+    AdminTripItem:
       properties:
         id:
           type: string
-        title:
+          title: Id
+        name:
           type: string
+          title: Name
         destination:
           type: string
-        start_date:
+          title: Destination
+        creator:
           type: string
-          format: date
-        end_date:
+          title: Creator
+        creator_email:
           type: string
-          format: date
-        creator_id:
-          type: string
+          title: Creator Email
+        members:
+          type: integer
+          title: Members
         status:
           type: string
-          enum: [collecting_constraints, planned, in_progress, completed]
-        lifecycle_status:
+          title: Status
+        created:
           type: string
-          readOnly: true
-          enum: [upcoming, in_progress, completed]
-          description: >-
-            Date-based travel progress using the current UTC date. Start and end
-            dates are inclusive. Explicitly completed trips remain completed.
-            Computed when read, without changing planning status or permissions.
-        member_ids:
-          type: array
-          items:
-            type: string
-        created_at:
-          type: string
-          format: date-time
-
-    CreateTripRequest:
-      type: object
-      required:
-        - title
-        - destination
-        - start_date
-        - end_date
-        - creator_id
-      properties:
-        title:
-          type: string
-        destination:
-          type: string
+          title: Created
         start_date:
           type: string
-          format: date
+          title: Start Date
         end_date:
           type: string
-          format: date
-        creator_id:
-          type: string
-
-    Member:
+          title: End Date
       type: object
       required:
-        - id
-        - name
-        - initials
-        - submitted
-        - role
+      - id
+      - name
+      - destination
+      - creator
+      - creator_email
+      - members
+      - status
+      - created
+      - start_date
+      - end_date
+      title: AdminTripItem
+    AdminUserItem:
       properties:
         id:
           type: string
+          title: Id
         name:
           type: string
-        initials:
+          title: Name
+        email:
           type: string
-        submitted:
+          title: Email
+        is_admin:
           type: boolean
-        role:
+          title: Is Admin
+        trips_count:
+          type: integer
+          title: Trips Count
+        created_at:
           type: string
-          enum: [creator, joiner]
-
-    JoinTripRequest:
+          title: Created At
       type: object
       required:
-        - name
+      - id
+      - name
+      - email
+      - is_admin
+      - trips_count
+      - created_at
+      title: AdminUserItem
+    ApiUsageItem:
       properties:
         name:
           type: string
-        user_id:
-          type: string
-
-    TripPermissions:
-      type: object
-      required:
-        - can_manage
-        - is_creator
-        - role
-      properties:
-        can_manage:
-          type: boolean
-        is_creator:
-          type: boolean
-        role:
-          type: string
-
-    Constraint:
-      type: object
-      required:
-        - id
-        - trip_id
-        - user_id
-        - budget_per_day
-      properties:
-        id:
-          type: string
-        trip_id:
-          type: string
-        user_id:
-          type: string
-        budget_per_day:
+          title: Name
+        used:
+          type: integer
+          title: Used
+        freeLimit:
+          type: integer
+          title: Freelimit
+        cost:
           type: number
-        dietary:
-          type: array
-          items:
-            type: string
-        style_tags:
-          type: array
-          items:
-            type: string
-        must_see:
-          type: array
-          items:
-            type: string
-        must_avoid:
-          type: array
-          items:
-            type: string
-
-    SubmitConstraintRequest:
-      type: object
-      required:
-        - user_id
-        - budget_per_day
-      properties:
-        user_id:
-          type: string
-        budget_per_day:
-          type: number
-        dietary:
-          type: array
-          items:
-            type: string
-        style_tags:
-          type: array
-          items:
-            type: string
-        must_see:
-          type: array
-          items:
-            type: string
-        must_avoid:
-          type: array
-          items:
-            type: string
-
-    Place:
-      type: object
-      required:
-        - place_id
-        - name
-        - category
-        - lat
-        - lng
-        - est_cost
-      properties:
-        place_id:
-          type: string
-        name:
-          type: string
+          title: Cost
         category:
           type: string
-        lat:
-          type: number
-        lng:
-          type: number
-        est_cost:
-          type: number
-        opening_hours:
-          type: object
-          nullable: true
-
-    PlanItem:
+          title: Category
       type: object
       required:
-        - place_id
-        - day_index
-        - start_time
-        - end_time
-        - cost
+      - name
+      - used
+      - freeLimit
+      - cost
+      - category
+      title: ApiUsageItem
+    AskAgentRequest:
+      properties:
+        question:
+          type: string
+          title: Question
+      type: object
+      required:
+      - question
+      title: AskAgentRequest
+    AskAgentResponse:
+      properties:
+        question:
+          type: string
+          title: Question
+        answer:
+          type: string
+          title: Answer
+      type: object
+      required:
+      - question
+      - answer
+      title: AskAgentResponse
+    AuthResponse:
+      properties:
+        token:
+          type: string
+          title: Token
+        user:
+          $ref: '#/components/schemas/UserResponse'
+      type: object
+      required:
+      - token
+      - user
+      title: AuthResponse
+    Constraint:
       properties:
         id:
           type: string
-        place_id:
+          title: Id
+        trip_id:
           type: string
-        place:
-          $ref: "#/components/schemas/Place"
+          title: Trip Id
+        user_id:
+          type: string
+          title: User Id
+        budget_per_day:
+          type: number
+          title: Budget Per Day
+          default: 100.0
+        dietary:
+          items:
+            type: string
+          type: array
+          title: Dietary
+        style_tags:
+          items:
+            type: string
+          type: array
+          title: Style Tags
+        must_see:
+          items:
+            type: string
+          type: array
+          title: Must See
+        must_avoid:
+          items:
+            type: string
+          type: array
+          title: Must Avoid
+        updated_at:
+          type: string
+          format: date-time
+          title: Updated At
+      type: object
+      required:
+      - trip_id
+      - user_id
+      title: Constraint
+    CreateExpenseRequest:
+      properties:
+        paid_by:
+          type: string
+          title: Paid By
+        amount:
+          type: number
+          title: Amount
+        description:
+          type: string
+          title: Description
+        category:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Category
+          default: activity
+        split_between:
+          anyOf:
+          - items:
+              type: string
+            type: array
+          - type: 'null'
+          title: Split Between
+      type: object
+      required:
+      - paid_by
+      - amount
+      - description
+      title: CreateExpenseRequest
+    CreatePlanItemRequest:
+      properties:
         day_index:
           type: integer
+          title: Day Index
+        place_name:
+          type: string
+          title: Place Name
+        category:
+          type: string
+          title: Category
+          default: attraction
         start_time:
           type: string
           format: date-time
+          title: Start Time
         end_time:
           type: string
           format: date-time
+          title: End Time
         cost:
           type: number
-
-    PlanDay:
+          title: Cost
+          default: 0.0
+        lat:
+          anyOf:
+          - type: number
+          - type: 'null'
+          title: Lat
+          default: 0.0
+        lng:
+          anyOf:
+          - type: number
+          - type: 'null'
+          title: Lng
+          default: 0.0
       type: object
       required:
-        - date
-        - day_index
-        - items
+      - day_index
+      - place_name
+      - start_time
+      - end_time
+      title: CreatePlanItemRequest
+    CreateTripRequest:
+      properties:
+        title:
+          type: string
+          title: Title
+        destination:
+          type: string
+          title: Destination
+        start_date:
+          type: string
+          format: date
+          title: Start Date
+        end_date:
+          type: string
+          format: date
+          title: End Date
+        creator_id:
+          type: string
+          title: Creator Id
+      type: object
+      required:
+      - title
+      - destination
+      - start_date
+      - end_date
+      - creator_id
+      title: CreateTripRequest
+    DebtTransfer:
+      properties:
+        debtor_id:
+          type: string
+          title: Debtor Id
+        creditor_id:
+          type: string
+          title: Creditor Id
+        amount:
+          type: number
+          title: Amount
+      type: object
+      required:
+      - debtor_id
+      - creditor_id
+      - amount
+      title: DebtTransfer
+    DisruptionEvent:
+      properties:
+        type:
+          $ref: '#/components/schemas/DisruptionType'
+        day_index:
+          type: integer
+          title: Day Index
+        place_id:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Place Id
+        delay_minutes:
+          anyOf:
+          - type: integer
+          - type: 'null'
+          title: Delay Minutes
+        description:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Description
+      type: object
+      required:
+      - type
+      - day_index
+      title: DisruptionEvent
+    DisruptionType:
+      type: string
+      enum:
+      - venue_closed
+      - flight_delayed
+      - weather_alert
+      - custom
+      title: DisruptionType
+    Expense:
+      properties:
+        id:
+          type: string
+          title: Id
+        trip_id:
+          type: string
+          title: Trip Id
+        paid_by:
+          type: string
+          title: Paid By
+        amount:
+          type: number
+          title: Amount
+          default: 0.0
+        description:
+          type: string
+          title: Description
+          default: ''
+        category:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Category
+          default: activity
+        split_between:
+          items:
+            type: string
+          type: array
+          title: Split Between
+        created_at:
+          type: string
+          format: date-time
+          title: Created At
+      type: object
+      required:
+      - trip_id
+      - paid_by
+      title: Expense
+    HTTPValidationError:
+      properties:
+        detail:
+          items:
+            $ref: '#/components/schemas/ValidationError'
+          type: array
+          title: Detail
+      type: object
+      title: HTTPValidationError
+    JoinTripRequest:
+      properties:
+        name:
+          type: string
+          title: Name
+        user_id:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: User Id
+      type: object
+      required:
+      - name
+      title: JoinTripRequest
+    LoginRequest:
+      properties:
+        email:
+          type: string
+          title: Email
+        password:
+          type: string
+          title: Password
+      type: object
+      required:
+      - email
+      - password
+      title: LoginRequest
+    MemberResponse:
+      properties:
+        id:
+          type: string
+          title: Id
+        name:
+          type: string
+          title: Name
+        initials:
+          type: string
+          title: Initials
+        submitted:
+          type: boolean
+          title: Submitted
+          default: false
+        role:
+          type: string
+          title: Role
+          default: joiner
+      type: object
+      required:
+      - id
+      - name
+      - initials
+      title: MemberResponse
+    PlaceResponse:
+      properties:
+        place_id:
+          type: string
+          title: Place Id
+        name:
+          type: string
+          title: Name
+        category:
+          type: string
+          title: Category
+        lat:
+          type: number
+          title: Lat
+        lng:
+          type: number
+          title: Lng
+        est_cost:
+          type: number
+          title: Est Cost
+        opening_hours:
+          anyOf:
+          - additionalProperties: true
+            type: object
+          - type: 'null'
+          title: Opening Hours
+      type: object
+      required:
+      - place_id
+      - name
+      - category
+      - lat
+      - lng
+      - est_cost
+      title: PlaceResponse
+    PlanDayResponse:
       properties:
         date:
           type: string
           format: date
+          title: Date
         day_index:
           type: integer
+          title: Day Index
         items:
-          type: array
           items:
-            $ref: "#/components/schemas/PlanItem"
-
-    Plan:
+            $ref: '#/components/schemas/PlanItemResponse'
+          type: array
+          title: Items
       type: object
       required:
-        - id
-        - trip_id
-        - version
-        - validation_status
-        - days
+      - date
+      - day_index
+      - items
+      title: PlanDayResponse
+    PlanItemResponse:
       properties:
         id:
           type: string
-        trip_id:
-          type: string
-        version:
-          type: integer
-        validation_status:
-          type: string
-          enum: [valid, invalid, partial]
-        days:
-          type: array
-          items:
-            $ref: "#/components/schemas/PlanDay"
-        notes:
-          type: array
-          items:
-            type: string
-        created_at:
-          type: string
-          format: date-time
-
-    DisruptionEvent:
-      type: object
-      required:
-        - type
-        - day_index
-      properties:
-        type:
-          type: string
-          enum: [venue_closed, flight_delayed, weather_alert, custom]
-        day_index:
-          type: integer
+          title: Id
         place_id:
           type: string
-        delay_minutes:
-          type: integer
-        description:
-          type: string
-
-    Expense:
-      type: object
-      required:
-        - id
-        - trip_id
-        - paid_by
-        - amount
-        - description
-        - split_between
-      properties:
-        id:
-          type: string
-        trip_id:
-          type: string
-        paid_by:
-          type: string
-        amount:
-          type: number
-        description:
-          type: string
-        category:
-          type: string
-        split_between:
-          type: array
-          items:
-            type: string
-        created_at:
-          type: string
-          format: date-time
-
-    CreateExpenseRequest:
-      type: object
-      required:
-        - paid_by
-        - amount
-        - description
-      properties:
-        paid_by:
-          type: string
-        amount:
-          type: number
-        description:
-          type: string
-        category:
-          type: string
-        split_between:
-          type: array
-          items:
-            type: string
-
-    DebtTransfer:
-      type: object
-      required:
-        - debtor_id
-        - creditor_id
-        - amount
-      properties:
-        debtor_id:
-          type: string
-        creditor_id:
-          type: string
-        amount:
-          type: number
-
-    UserBalanceSummary:
-      type: object
-      required:
-        - user_id
-        - total_paid
-        - total_share
-        - net_balance
-      properties:
-        user_id:
-          type: string
-        total_paid:
-          type: number
-        total_share:
-          type: number
-        net_balance:
-          type: number
-
-    SettleUpReport:
-      type: object
-      required:
-        - trip_id
-        - user_balances
-        - transfers
-      properties:
-        trip_id:
-          type: string
-        user_balances:
-          type: array
-          items:
-            $ref: "#/components/schemas/UserBalanceSummary"
-        transfers:
-          type: array
-          items:
-            $ref: "#/components/schemas/DebtTransfer"
-
-    UpdateExpenseRequest:
-      type: object
-      properties:
-        paid_by:
-          type: string
-        amount:
-          type: number
-        description:
-          type: string
-        category:
-          type: string
-        split_between:
-          type: array
-          items:
-            type: string
-
-    SignupRequest:
-      type: object
-      required:
-        - email
-        - password
-        - name
-      properties:
-        email:
-          type: string
-          format: email
-        password:
-          type: string
-        name:
-          type: string
-
-    LoginRequest:
-      type: object
-      required:
-        - email
-        - password
-      properties:
-        email:
-          type: string
-          format: email
-        password:
-          type: string
-
-    UserResponse:
-      type: object
-      required:
-        - id
-        - email
-        - name
-        - created_at
-      properties:
-        id:
-          type: string
-        email:
-          type: string
-        name:
-          type: string
-        created_at:
-          type: string
-          format: date-time
-
-    AuthResponse:
-      type: object
-      required:
-        - token
-        - user
-      properties:
-        token:
-          type: string
-        user:
-          $ref: "#/components/schemas/UserResponse"
-
-    UpdateTripRequest:
-      type: object
-      properties:
-        title:
-          type: string
-        destination:
-          type: string
-        start_date:
-          type: string
-          format: date
-        end_date:
-          type: string
-          format: date
-        status:
-          type: string
-          enum: [collecting_constraints, planned, in_progress, completed]
-        member_ids:
-          type: array
-          items:
-            type: string
-
-    CreatePlanItemRequest:
-      type: object
-      required:
-        - day_index
-        - place_name
-        - start_time
-        - end_time
-      properties:
+          title: Place Id
+        place:
+          anyOf:
+          - $ref: '#/components/schemas/PlaceResponse'
+          - type: 'null'
         day_index:
           type: integer
-        place_name:
-          type: string
-        category:
-          type: string
+          title: Day Index
         start_time:
           type: string
           format: date-time
+          title: Start Time
         end_time:
           type: string
           format: date-time
+          title: End Time
         cost:
           type: number
-        lat:
-          type: number
-        lng:
-          type: number
-
-    UpdatePlanItemRequest:
+          title: Cost
       type: object
+      required:
+      - id
+      - place_id
+      - day_index
+      - start_time
+      - end_time
+      - cost
+      title: PlanItemResponse
+    PlanResponse:
       properties:
-        day_index:
+        id:
+          type: string
+          title: Id
+        trip_id:
+          type: string
+          title: Trip Id
+        version:
           type: integer
-        place_name:
-          type: string
-        category:
-          type: string
-        start_time:
+          title: Version
+        validation_status:
+          $ref: '#/components/schemas/ValidationStatus'
+        days:
+          items:
+            $ref: '#/components/schemas/PlanDayResponse'
+          type: array
+          title: Days
+        notes:
+          items:
+            type: string
+          type: array
+          title: Notes
+        created_at:
           type: string
           format: date-time
-        end_time:
-          type: string
-          format: date-time
-        cost:
-          type: number
-        lat:
-          type: number
-        lng:
-          type: number
-
+          title: Created At
+      type: object
+      required:
+      - id
+      - trip_id
+      - version
+      - validation_status
+      - days
+      - notes
+      - created_at
+      title: PlanResponse
     RefinePlanRequest:
-      type: object
-      required:
-        - instruction
       properties:
         instruction:
           type: string
+          title: Instruction
+        user_id:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: User Id
+      type: object
+      required:
+      - instruction
+      title: RefinePlanRequest
+    SettleUpReport:
+      properties:
+        trip_id:
+          type: string
+          title: Trip Id
+        user_balances:
+          items:
+            $ref: '#/components/schemas/UserBalanceSummary'
+          type: array
+          title: User Balances
+        transfers:
+          items:
+            $ref: '#/components/schemas/DebtTransfer'
+          type: array
+          title: Transfers
+      type: object
+      required:
+      - trip_id
+      - user_balances
+      - transfers
+      title: SettleUpReport
+    SignupRequest:
+      properties:
+        email:
+          type: string
+          title: Email
+        password:
+          type: string
+          title: Password
+        name:
+          type: string
+          title: Name
+      type: object
+      required:
+      - email
+      - password
+      - name
+      title: SignupRequest
+    SubmitConstraintRequest:
+      properties:
         user_id:
           type: string
-
-    AskAgentRequest:
+          title: User Id
+        budget_per_day:
+          type: number
+          title: Budget Per Day
+        dietary:
+          anyOf:
+          - items:
+              type: string
+            type: array
+          - type: 'null'
+          title: Dietary
+        style_tags:
+          anyOf:
+          - items:
+              type: string
+            type: array
+          - type: 'null'
+          title: Style Tags
+        must_see:
+          anyOf:
+          - items:
+              type: string
+            type: array
+          - type: 'null'
+          title: Must See
+        must_avoid:
+          anyOf:
+          - items:
+              type: string
+            type: array
+          - type: 'null'
+          title: Must Avoid
       type: object
       required:
-        - question
+      - user_id
+      - budget_per_day
+      title: SubmitConstraintRequest
+    SystemHealthNode:
       properties:
-        question:
+        name:
           type: string
-
-    AskAgentResponse:
+          title: Name
+        status:
+          type: string
+          title: Status
+        detail:
+          type: string
+          title: Detail
+        latency_ms:
+          anyOf:
+          - type: number
+          - type: 'null'
+          title: Latency Ms
       type: object
       required:
-        - question
-        - answer
+      - name
+      - status
+      - detail
+      title: SystemHealthNode
+    SystemHealthResponse:
       properties:
-        question:
+        status:
           type: string
-        answer:
+          title: Status
+        version:
           type: string
-
+          title: Version
+      type: object
+      required:
+      - status
+      - version
+      title: SystemHealthResponse
+    Trip:
+      properties:
+        id:
+          type: string
+          title: Id
+        title:
+          type: string
+          title: Title
+        destination:
+          type: string
+          title: Destination
+        start_date:
+          type: string
+          format: date
+          title: Start Date
+        end_date:
+          type: string
+          format: date
+          title: End Date
+        creator_id:
+          type: string
+          title: Creator Id
+        status:
+          $ref: '#/components/schemas/TripStatus'
+          default: collecting_constraints
+        member_ids:
+          items:
+            type: string
+          type: array
+          title: Member Ids
+        created_at:
+          type: string
+          format: date-time
+          title: Created At
+        lifecycle_status:
+          type: string
+          enum:
+          - upcoming
+          - in_progress
+          - completed
+          title: Lifecycle Status
+          description: Read-only progress evaluated on each response using the UTC
+            date.
+          readOnly: true
+      type: object
+      required:
+      - title
+      - destination
+      - start_date
+      - end_date
+      - creator_id
+      - lifecycle_status
+      title: Trip
+    TripPermissionsResponse:
+      properties:
+        can_manage:
+          type: boolean
+          title: Can Manage
+        is_creator:
+          type: boolean
+          title: Is Creator
+        role:
+          type: string
+          title: Role
+      type: object
+      required:
+      - can_manage
+      - is_creator
+      - role
+      title: TripPermissionsResponse
+    TripStatus:
+      type: string
+      enum:
+      - collecting_constraints
+      - planned
+      - in_progress
+      - completed
+      - flagged
+      title: TripStatus
+    UpdateExpenseRequest:
+      properties:
+        paid_by:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Paid By
+        amount:
+          anyOf:
+          - type: number
+          - type: 'null'
+          title: Amount
+        description:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Description
+        category:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Category
+        split_between:
+          anyOf:
+          - items:
+              type: string
+            type: array
+          - type: 'null'
+          title: Split Between
+      type: object
+      title: UpdateExpenseRequest
+    UpdatePlanItemRequest:
+      properties:
+        day_index:
+          anyOf:
+          - type: integer
+          - type: 'null'
+          title: Day Index
+        place_name:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Place Name
+        category:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Category
+        start_time:
+          anyOf:
+          - type: string
+            format: date-time
+          - type: 'null'
+          title: Start Time
+        end_time:
+          anyOf:
+          - type: string
+            format: date-time
+          - type: 'null'
+          title: End Time
+        cost:
+          anyOf:
+          - type: number
+          - type: 'null'
+          title: Cost
+        lat:
+          anyOf:
+          - type: number
+          - type: 'null'
+          title: Lat
+        lng:
+          anyOf:
+          - type: number
+          - type: 'null'
+          title: Lng
+      type: object
+      title: UpdatePlanItemRequest
+    UpdateTripRequest:
+      properties:
+        title:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Title
+        destination:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Destination
+        start_date:
+          anyOf:
+          - type: string
+            format: date
+          - type: 'null'
+          title: Start Date
+        end_date:
+          anyOf:
+          - type: string
+            format: date
+          - type: 'null'
+          title: End Date
+        status:
+          anyOf:
+          - $ref: '#/components/schemas/TripStatus'
+          - type: 'null'
+        member_ids:
+          anyOf:
+          - items:
+              type: string
+            type: array
+          - type: 'null'
+          title: Member Ids
+      type: object
+      title: UpdateTripRequest
+    UpdateTripStatusRequest:
+      properties:
+        status:
+          type: string
+          title: Status
+      type: object
+      required:
+      - status
+      title: UpdateTripStatusRequest
+    UserBalanceSummary:
+      properties:
+        user_id:
+          type: string
+          title: User Id
+        total_paid:
+          type: number
+          title: Total Paid
+        total_share:
+          type: number
+          title: Total Share
+        net_balance:
+          type: number
+          title: Net Balance
+      type: object
+      required:
+      - user_id
+      - total_paid
+      - total_share
+      - net_balance
+      title: UserBalanceSummary
+    UserResponse:
+      properties:
+        id:
+          type: string
+          title: Id
+        email:
+          type: string
+          title: Email
+        name:
+          type: string
+          title: Name
+        is_admin:
+          type: boolean
+          title: Is Admin
+          default: false
+        created_at:
+          type: string
+          format: date-time
+          title: Created At
+      type: object
+      required:
+      - id
+      - email
+      - name
+      - created_at
+      title: UserResponse
+    ValidationError:
+      properties:
+        loc:
+          items:
+            anyOf:
+            - type: string
+            - type: integer
+          type: array
+          title: Location
+        msg:
+          type: string
+          title: Message
+        type:
+          type: string
+          title: Error Type
+        input:
+          title: Input
+        ctx:
+          type: object
+          title: Context
+      type: object
+      required:
+      - loc
+      - msg
+      - type
+      title: ValidationError
     ValidationIssue:
-      type: object
-      required:
-        - type
-        - severity
-        - message
       properties:
         type:
           type: string
-          enum: [budget, travel_time, open_hours]
+          title: Type
         severity:
           type: string
-          enum: [error, warning]
+          title: Severity
         day_index:
-          type: integer
+          anyOf:
+          - type: integer
+          - type: 'null'
+          title: Day Index
         place_id:
-          type: string
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Place Id
         user_id:
-          type: string
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: User Id
         message:
           type: string
+          title: Message
         suggested_action:
-          type: string
-
-    ValidationResult:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Suggested Action
       type: object
       required:
-        - is_valid
-        - status
-        - issues
+      - type
+      - severity
+      - message
+      title: ValidationIssue
+    ValidationResult:
       properties:
         is_valid:
           type: boolean
+          title: Is Valid
+          default: true
         status:
-          type: string
-          enum: [valid, invalid, partial]
+          $ref: '#/components/schemas/ValidationStatus'
+          default: valid
         issues:
-          type: array
           items:
-            $ref: "#/components/schemas/ValidationIssue"
-
+            $ref: '#/components/schemas/ValidationIssue'
+          type: array
+          title: Issues
+          default: []
+      type: object
+      title: ValidationResult
+    ValidationStatus:
+      type: string
+      enum:
+      - valid
+      - invalid
+      - partial
+      title: ValidationStatus
   securitySchemes:
-    BearerAuth:
+    HTTPBearer:
       type: http
       scheme: bearer
-      bearerFormat: JWT
+servers:
+- url: http://localhost:8000
+  description: Local development server

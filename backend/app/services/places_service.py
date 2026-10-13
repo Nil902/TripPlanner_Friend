@@ -714,59 +714,8 @@ def get_or_create_places_for_destination(
             catalog = live_places
 
     if not catalog:
-        # Fallback generator for unlisted cities with realistic mock attributes
-        base_lat = 40.7128 if "new york" in dest_key else 37.7749
-        base_lng = -74.0060 if "new york" in dest_key else -122.4194
-        catalog = [
-            {
-                "name": f"{destination} Historic Old Town",
-                "category": "landmark",
-                "lat": base_lat,
-                "lng": base_lng,
-                "est_cost": 0.0,
-                "hours": ("0800", "2000"),
-            },
-            {
-                "name": f"{destination} Central Art Museum",
-                "category": "museum",
-                "lat": base_lat + 0.015,
-                "lng": base_lng + 0.012,
-                "est_cost": 14.0,
-                "hours": ("1000", "1800"),
-            },
-            {
-                "name": f"{destination} Grand Botanical Garden",
-                "category": "park",
-                "lat": base_lat - 0.012,
-                "lng": base_lng - 0.015,
-                "est_cost": 8.0,
-                "hours": ("0900", "1700"),
-            },
-            {
-                "name": f"{destination} Culinary Market Hall",
-                "category": "restaurant",
-                "lat": base_lat + 0.005,
-                "lng": base_lng - 0.008,
-                "est_cost": 24.0,
-                "hours": ("1100", "2200"),
-            },
-            {
-                "name": f"{destination} Panoramic Viewpoint",
-                "category": "viewpoint",
-                "lat": base_lat - 0.022,
-                "lng": base_lng + 0.018,
-                "est_cost": 0.0,
-                "hours": ("0000", "2359"),
-            },
-            {
-                "name": f"{destination} Riverside Bistro",
-                "category": "restaurant",
-                "lat": base_lat + 0.008,
-                "lng": base_lng + 0.014,
-                "est_cost": 32.0,
-                "hours": ("1200", "2300"),
-            },
-        ]
+        logger.warning("Venue data unavailable; no synthetic venues will be generated.")
+        return []
 
     places: list[Place] = []
     for item in catalog:

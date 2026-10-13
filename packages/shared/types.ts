@@ -20,6 +20,11 @@ export type TripLifecycleStatus = "upcoming" | "in_progress" | "completed";
 
 export type ValidationStatus = "valid" | "invalid" | "partial";
 
+export interface SystemHealthResponse {
+  status: string;
+  version: string;
+}
+
 export type DisruptionType =
   | "venue_closed"
   | "flight_delayed"
@@ -272,7 +277,7 @@ export interface JoinTripRequest {
 export interface TripPermissions {
   can_manage: boolean;
   is_creator: boolean;
-  role: 'creator' | 'joiner';
+  role: 'creator' | 'joiner' | 'admin';
 }
 
 export type TripPermissionsResponse = TripPermissions;

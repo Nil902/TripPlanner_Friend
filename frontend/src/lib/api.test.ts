@@ -1,9 +1,55 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { api } from './api';
 
 describe('API Client Methods', () => {
   beforeEach(() => {
     vi.restoreAllMocks();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it.each([400, 401, 403, 404, 422, 429])('does not retry a %s response', async (status) => {
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response(JSON.stringify({ detail: { message: 'Please check your request.' } }), {
+        status,
+        headers: { 'Content-Type': 'application/json' },
+      }),
+    );
+    await expect(api.get('/api/v1/trips')).rejects.toThrow('Please check your request.');
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it.each(['post', 'put', 'patch', 'del'] as const)('does not retry a failed %s mutation', async (method) => {
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(null, { status: 503 }));
+    await expect(api[method]('/api/v1/trips', {})).rejects.toThrow('503');
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not repeat an expense after a lost response', async () => {
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockRejectedValue(new TypeError('Failed to fetch'));
+    await expect(api.post('/api/v1/trips/t1/expenses', { amount: 20 })).rejects.toThrow('Failed to fetch');
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it('retries a transient read failure and returns the successful response', async () => {
+    vi.useFakeTimers();
+    const fetchSpy = vi.spyOn(globalThis, 'fetch')
+      .mockResolvedValueOnce(new Response(null, { status: 503 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify([{ id: 't1' }]), {
+        headers: { 'Content-Type': 'application/json' },
+      }));
+    const pending = api.trips.list();
+    await vi.runAllTimersAsync();
+    expect(await pending).toEqual([{ id: 't1' }]);
+    expect(fetchSpy).toHaveBeenCalledTimes(2);
+  });
+
+  it('does not retry an aborted request', async () => {
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockRejectedValue(new DOMException('Aborted', 'AbortError'));
+    await expect(api.get('/api/v1/trips')).rejects.toThrow('Aborted');
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
   });
 
   it('generates the correct export ics URL', () => {

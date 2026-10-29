@@ -79,3 +79,5 @@ Thumbs.db
 AGENTS.md
 **/AGENTS.md
 
+# Local engineering reference requested outside version control
+SYSTEM_ENGINEERING_GUIDE.local.md

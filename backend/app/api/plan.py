@@ -1,5 +1,4 @@
 import logging
-import math
 import uuid
 from datetime import datetime
 
@@ -144,7 +143,11 @@ def generate_plan(
 
     try:
         plan_response = AgentPlanner.generate_plan(session, trip, list(constraints))
+    except HTTPException:
+        session.rollback()
+        raise
     except Exception as exc:
+        session.rollback()
         logger.exception("Agent planning loop failed for trip %s", trip_id)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -154,8 +157,9 @@ def generate_plan(
             },
         ) from exc
 
-    # Update trip status
-    trip.status = TripStatus.PLANNED
+    # Planning must not reopen a finished trip or erase moderation/travel state.
+    if trip.status == TripStatus.COLLECTING_CONSTRAINTS:
+        trip.status = TripStatus.PLANNED
     session.add(trip)
     session.commit()
 
@@ -296,7 +300,8 @@ def add_plan_item(
         session.commit()
         session.refresh(plan)
 
-        trip.status = TripStatus.PLANNED
+        if trip.status == TripStatus.COLLECTING_CONSTRAINTS:
+            trip.status = TripStatus.PLANNED
         session.add(trip)
         session.commit()
 
@@ -336,20 +341,11 @@ def add_plan_item(
             resolved_lng = matched.lng
             if not req.category or req.category == "attraction":
                 req.category = matched.category
-        elif candidate_places:
-            # Anchor near destination center with realistic spatial distribution
-            base_p = candidate_places[0]
-            existing_items = session.exec(
-                select(PlanItem).where(PlanItem.plan_id == plan.id)
-            ).all()
-            stop_num = len(existing_items) + 1
-            angle = (stop_num * 1.35) % (2 * math.pi)
-            dist = 0.008 + (stop_num % 4) * 0.004
-            resolved_lat = round(base_p.lat + math.sin(angle) * dist, 6)
-            resolved_lng = round(base_p.lng + math.cos(angle) * dist, 6)
         else:
-            resolved_lat = 38.7169
-            resolved_lng = -9.1399
+            # An unresolved venue has unknown coordinates. A generated point
+            # near the city center would falsely appear to be its location.
+            resolved_lat = 0.0
+            resolved_lng = 0.0
 
     # Create or find place
     place_id = f"custom_{str(uuid.uuid4())[:8]}"
@@ -616,7 +612,11 @@ def refine_plan(
             instruction=instruction,
             user_id=access.identity.id,
         )
+    except HTTPException:
+        session.rollback()
+        raise
     except Exception as exc:
+        session.rollback()
         logger.exception("Plan refinement failed for trip %s", trip_id)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,

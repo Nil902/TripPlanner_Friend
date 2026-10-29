@@ -1140,10 +1140,7 @@ paths:
           content:
             application/json:
               schema:
-                additionalProperties:
-                  type: string
-                type: object
-                title: Response Check Health Healthz Get
+                $ref: '#/components/schemas/SystemHealthResponse'
   /readyz:
     get:
       tags:
@@ -1157,10 +1154,7 @@ paths:
           content:
             application/json:
               schema:
-                additionalProperties:
-                  type: string
-                type: object
-                title: Response Check Readiness Readyz Get
+                $ref: '#/components/schemas/SystemHealthResponse'
 components:
   schemas:
     AdminTripItem:
@@ -1842,6 +1836,19 @@ components:
       - status
       - detail
       title: SystemHealthNode
+    SystemHealthResponse:
+      properties:
+        status:
+          type: string
+          title: Status
+        version:
+          type: string
+          title: Version
+      type: object
+      required:
+      - status
+      - version
+      title: SystemHealthResponse
     Trip:
       properties:
         id:
@@ -1876,6 +1883,16 @@ components:
           type: string
           format: date-time
           title: Created At
+        lifecycle_status:
+          type: string
+          enum:
+          - upcoming
+          - in_progress
+          - completed
+          title: Lifecycle Status
+          description: Read-only progress evaluated on each response using the UTC
+            date.
+          readOnly: true
       type: object
       required:
       - title
@@ -1883,6 +1900,7 @@ components:
       - start_date
       - end_date
       - creator_id
+      - lifecycle_status
       title: Trip
     TripPermissionsResponse:
       properties:

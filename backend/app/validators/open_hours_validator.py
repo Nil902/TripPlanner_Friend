@@ -1,85 +1,117 @@
-"""
-Deterministic operating hours validator. Pure function.
-"""
+"""Pure validation of weekly venue hours, including overnight opening periods."""
+
+from typing import Any
 
 from app.models.schema import PlanDayResponse, ValidationIssue
 
+_WEEK_MINUTES = 7 * 24 * 60
+
+
+def _clock_minutes(value: str) -> int:
+    if len(value) != 4 or not value.isdigit():
+        raise ValueError("Opening times must use HHMM.")
+    hours, minutes = int(value[:2]), int(value[2:])
+    if hours > 23 or minutes > 59:
+        raise ValueError("Invalid opening time.")
+    return hours * 60 + minutes
+
+
+def _opening_window(period: dict[str, Any]) -> tuple[int, int] | None:
+    opening = period["open"]
+    opening_day = int(opening["day"])
+    if not 0 <= opening_day <= 6:
+        raise ValueError("Invalid opening weekday.")
+    opening_clock = _clock_minutes(opening.get("time", "0000"))
+    closing = period.get("close")
+    # Google represents a venue open continuously as Sunday 00:00, no close.
+    if not closing:
+        if opening_day == 0 and opening_clock == 0:
+            return None
+        raise ValueError("Missing closing time.")
+    closing_day = int(closing.get("day", opening_day))
+    if not 0 <= closing_day <= 6:
+        raise ValueError("Invalid closing weekday.")
+    closing_clock = _clock_minutes(closing.get("time", "2359"))
+    span_days = (closing_day - opening_day) % 7
+    if span_days == 0 and closing_clock <= opening_clock:
+        span_days = 1
+    start = opening_day * 1440 + opening_clock
+    end = (opening_day + span_days) * 1440 + closing_clock
+    return start, end
+
 
 def check_open_hours(days: list[PlanDayResponse]) -> list[ValidationIssue]:
-    """
-    Validates whether scheduled activities fall within the venue's operating hours.
-    Missing opening hours data is safely skipped (as mandated by Section 9.3).
+    """Check complete visits against every weekly opening interval.
+
+    Missing data is skipped. Malformed provider data produces a warning rather
+    than crashing validation or being reported as confirmed opening hours.
     """
     issues: list[ValidationIssue] = []
-
     for day in days:
         for item in day.items:
             place = item.place
             if not place or not place.opening_hours:
-                # Section 9.3: Skip open-hours check if data is null/missing
                 continue
-
-            opening_data = place.opening_hours
-            periods = opening_data.get("periods")
+            periods = place.opening_hours.get("periods")
             if not periods:
                 continue
-
-            # In Python weekday: Monday is 0, Sunday is 6.
-            # In Google Places API weekday: Sunday is 0, Monday is 1, ..., Saturday is 6.
-            python_weekday = item.start_time.weekday()
-            google_day = (python_weekday + 1) % 7
-
-            # Find period for this day
-            period_for_day = next(
-                (p for p in periods if p.get("open", {}).get("day") == google_day), None
-            )
-            if not period_for_day:
-                # Venue is closed entirely on this day
+            try:
+                windows = [_opening_window(p) for p in periods]
+            except (KeyError, TypeError, ValueError, AttributeError):
                 issues.append(
                     ValidationIssue(
                         type="open_hours",
-                        severity="error",
+                        severity="warning",
                         day_index=day.day_index,
                         place_id=item.place_id,
-                        message=f"'{place.name}' appears to be closed on {item.start_time.strftime('%A')}s.",
-                        suggested_action="Reschedule visit to another day or select an alternative venue.",
+                        message=f"Opening hours for '{place.name}' could not be verified.",
+                        suggested_action="Confirm current hours with the venue.",
                     )
                 )
                 continue
+            if None in windows:
+                continue
+            google_day = (item.start_time.weekday() + 1) % 7
+            start = (
+                google_day * 1440 + item.start_time.hour * 60 + item.start_time.minute
+            )
+            span_days = (item.end_time.date() - item.start_time.date()).days
+            end = (
+                (google_day + span_days) * 1440
+                + item.end_time.hour * 60
+                + item.end_time.minute
+            )
+            if any(
+                window is not None
+                and window[0] + offset <= start < end <= window[1] + offset
+                for window in windows
+                for offset in (-_WEEK_MINUTES, 0, _WEEK_MINUTES)
+            ):
+                continue
 
-            # Use integer comparison to avoid lexicographic ordering bugs with
-            # midnight-crossing venues (e.g. close_hhmm="0100" < start_hhmm="2200").
-            start_int = item.start_time.hour * 100 + item.start_time.minute
-            end_int = item.end_time.hour * 100 + item.end_time.minute
-
-            open_hhmm = period_for_day.get("open", {}).get("time", "0000")
-            close_hhmm = period_for_day.get("close", {}).get("time", "2359")
-            open_int = int(open_hhmm)
-            close_int = int(close_hhmm)
-
-            # Keep formatted strings for display purposes only
-            start_hhmm = f"{item.start_time.hour:02d}{item.start_time.minute:02d}"
-            end_hhmm = f"{item.end_time.hour:02d}{item.end_time.minute:02d}"
-
-            if start_int < open_int or end_int > close_int:
-                formatted_open = f"{open_hhmm[:2]}:{open_hhmm[2:]}"
-                formatted_close = f"{close_hhmm[:2]}:{close_hhmm[2:]}"
-                scheduled_window = (
-                    f"{start_hhmm[:2]}:{start_hhmm[2:]}-{end_hhmm[:2]}:{end_hhmm[2:]}"
+            opens_today = any(p["open"]["day"] == google_day for p in periods)
+            if not opens_today:
+                message = f"'{place.name}' appears to be closed on {item.start_time.strftime('%A')}s."
+            else:
+                labels = [
+                    f"{p['open'].get('time', '0000')[:2]}:{p['open'].get('time', '0000')[2:]} - "
+                    f"{p.get('close', {}).get('time', '2359')[:2]}:{p.get('close', {}).get('time', '2359')[2:]}"
+                    for p in periods
+                    if p["open"]["day"] == google_day
+                ]
+                message = (
+                    f"'{place.name}' is scheduled during "
+                    f"{item.start_time:%H:%M}-{item.end_time:%H:%M}, "
+                    f"but operating hours are {' or '.join(labels)}."
                 )
-
-                issues.append(
-                    ValidationIssue(
-                        type="open_hours",
-                        severity="error",
-                        day_index=day.day_index,
-                        place_id=item.place_id,
-                        message=(
-                            f"'{place.name}' is scheduled during {scheduled_window}, "
-                            f"but operating hours are {formatted_open} - {formatted_close}."
-                        ),
-                        suggested_action="Adjust activity start/end times within operating hours.",
-                    )
+            issues.append(
+                ValidationIssue(
+                    type="open_hours",
+                    severity="error",
+                    day_index=day.day_index,
+                    place_id=item.place_id,
+                    message=message,
+                    suggested_action="Reschedule within operating hours or select an alternative venue.",
                 )
-
+            )
     return issues

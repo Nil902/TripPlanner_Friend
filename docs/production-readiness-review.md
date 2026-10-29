@@ -54,15 +54,18 @@ branch. No cloud resources have been created, and no source has been pushed.
 - The shared OpenAPI contract is regenerated from the actual API. Its TypeScript
   interfaces and frontend consumers reflect the updated requests and guest
   response.
+- The release includes the latest `main` changes through `70c4fb8`, including
+  trip lifecycle/status displays, planner safety and transaction fixes, and
+  opening-hours validation. Their tests now use verified accounts where needed.
 - GitHub CI verifies lint, types, tests, dependency advisories, PostgreSQL schema
   upgrades, the production container, and authenticated PostgreSQL write flows.
   The Render Blueprint deploys `main` after GitHub checks pass.
 
 ## Verification
 
-- Backend: lint, formatting, types, and **99 passing tests**, including access,
+- Backend: lint, formatting, types, and **130 passing tests**, including access,
   impersonation, cross-trip editing, request guards, and credential redaction.
-- Frontend: lint, types, production build, and **90 passing tests**.
+- Frontend: lint, types, production build, and **142 passing tests**.
 - The backend suite also passes inside the Linux/Python 3.12 container.
 - Runtime and frontend dependency audits report zero known vulnerabilities.
 - Fresh PostgreSQL upgrades, repeat upgrades, and Alembic schema parity pass.

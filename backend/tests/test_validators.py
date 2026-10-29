@@ -445,14 +445,7 @@ def test_open_hours_midnight_crossing_venue_regression():
     )
     days = [PlanDayResponse(date=date(2026, 10, 1), day_index=0, items=[item])]
     issues = check_open_hours(days)
-    # Before fix: string "2100" > "0100" would pass but "2300" > "0100" would
-    # wrongly flag an error since "23" > "01" lexicographically is TRUE but
-    # the venue closes AFTER midnight. Now we use integer comparison so close_int
-    # for same-day purpose is 100 which IS less than end_int=2300 — this still
-    # triggers. The real fix ensures a venue with close_int=100 (01:00 next day)
-    # is treated as 2500 to span midnight. For now confirm no crash and correct
-    # detection of actual within-range scheduling:
-    assert isinstance(issues, list)
+    assert issues == []
 
 
 def test_travel_time_overlap_detection_regression():

@@ -29,6 +29,7 @@ from app.core.config import settings
 from app.core.db import engine, init_db
 from app.core.logging import install_secret_redaction
 from app.core.request_guards import RequestGuards
+from app.models.schema import SystemHealthResponse
 from app.web import mount_frontend
 
 logger = logging.getLogger(__name__)
@@ -105,13 +106,13 @@ app.include_router(rebalance.router)
 app.include_router(expenses.router)
 
 
-@app.get("/healthz", tags=["System"])
+@app.get("/healthz", tags=["System"], response_model=SystemHealthResponse)
 async def check_health() -> dict[str, str]:
     """Health check endpoint for container orchestrators and CI verification."""
     return {"status": "ok", "version": "1.0.0"}
 
 
-@app.get("/readyz", tags=["System"])
+@app.get("/readyz", tags=["System"], response_model=SystemHealthResponse)
 def check_readiness() -> dict[str, str]:
     """Require a working database before routing traffic to a new deployment."""
     from fastapi import HTTPException
@@ -128,7 +129,7 @@ def check_readiness() -> dict[str, str]:
                 "message": "Service is starting. Please try again.",
             },
         ) from None
-    return {"status": "ready"}
+    return {"status": "ready", "version": "1.0.0"}
 
 
 # The production image includes the Vite build here. Local development continues

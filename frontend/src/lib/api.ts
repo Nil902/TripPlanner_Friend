@@ -15,6 +15,8 @@ import type {
   AskAgentResponse,
   MemberResponse,
   JoinTripRequest,
+  SystemHealthResponse,
+  TripPermissionsResponse,
 } from '@shared/types';
 
 const BASE =
@@ -196,7 +198,7 @@ async function request<T>(
 
       return res.json() as Promise<T>;
     } catch (err) {
-      if (err instanceof Error && err.name === 'AbortError') throw err;
+      if (signal?.aborted || (typeof err === 'object' && err !== null && 'name' in err && err.name === 'AbortError')) throw err;
       if (err instanceof ApiError && err.status < 500) throw err;
       lastError = err;
       if (attempt < maxRetries) {
@@ -234,6 +236,10 @@ export const api = {
   },
 
   // High-level API domain methods
+  system: {
+    health: () => api.get<SystemHealthResponse>('/healthz'),
+    readiness: () => api.get<SystemHealthResponse>('/readyz'),
+  },
   auth: {
     signup: (data: { email: string; password: string; name: string }) =>
       api.post<{ token: string; user: { id: string; email: string; name: string } }>(
@@ -266,7 +272,7 @@ export const api = {
         `/api/v1/trips/${tripId}/members`,
       ),
     getPermissions: (tripId: string, userId?: string) =>
-      api.get<{ can_manage: boolean; is_creator: boolean; role: string }>(
+      api.get<TripPermissionsResponse>(
         `/api/v1/trips/${tripId}/permissions${userId ? `?user_id=${userId}` : ''}`,
       ),
   },

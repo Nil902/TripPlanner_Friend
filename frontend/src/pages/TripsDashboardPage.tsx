@@ -22,6 +22,10 @@ import { PrimaryButton, SecondaryButton } from '../components/Button';
 import CreateTripModal from '../components/CreateTripModal';
 import { RequireAuth } from '../middleware';
 import { CurrentUser } from '../App';
+import type { TripLifecycleStatus } from '@shared/types';
+import TripStatusBadge from '../components/TripStatusBadge';
+import { getTripLifecycleStatus, TRIP_LIFECYCLE_LABELS } from '../lib/tripLifecycle';
+import { useToday } from '../lib/useToday';
 
 export interface TripsDashboardPageProps {
   user: { id: string; email: string; name: string };
@@ -45,6 +49,13 @@ export default function TripsDashboardPage({
   onRequireLogin,
 }: TripsDashboardPageProps) {
   const [isCreateOpen, setIsCreateOpen] = useState(false);
+  const [statusFilter, setStatusFilter] = useState<'all' | TripLifecycleStatus>('all');
+  const today = useToday();
+  const counts: Record<TripLifecycleStatus, number> = { upcoming: 0, in_progress: 0, completed: 0 };
+  for (const trip of trips) counts[getTripLifecycleStatus(trip, today)]++;
+  const filteredTrips = statusFilter === 'all'
+    ? trips
+    : trips.filter((trip) => getTripLifecycleStatus(trip, today) === statusFilter);
 
   const creatorUser =
     currentUser ||
@@ -149,9 +160,22 @@ export default function TripsDashboardPage({
                 color: INK,
               }}
             >
-              Active Group Trips ({trips.length})
+              Group Trips ({trips.length})
             </h2>
           </div>
+
+          <div aria-label="Filter trips by progress" className="mb-3 flex flex-wrap gap-2">
+            {(['all', 'upcoming', 'in_progress', 'completed'] as const).map((filter) => (
+              <button key={filter} type="button" aria-pressed={statusFilter === filter}
+                onClick={() => setStatusFilter(filter)}
+                className={`rounded-full border px-3 py-2 text-sm focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#2B4C3F] ${statusFilter === filter ? 'border-[#2B4C3F] bg-[#2B4C3F] text-white' : 'border-[#DDD5C4] bg-white text-[#24211C]'}`}>
+                {filter === 'all' ? 'All' : TRIP_LIFECYCLE_LABELS[filter]} ({filter === 'all' ? trips.length : counts[filter]})
+              </button>
+            ))}
+          </div>
+          <p className="mb-4 text-xs text-[#595347]">
+            Progress updates automatically from your travel dates (UTC). Trips remain in progress through their end date.
+          </p>
 
           {trips.length === 0 ? (
             <div
@@ -175,6 +199,11 @@ export default function TripsDashboardPage({
                 <Plus size={16} /> Create Your First Trip
               </PrimaryButton>
             </div>
+          ) : filteredTrips.length === 0 ? (
+            <p role="status" className="rounded-xl border border-[#DDD5C4] bg-white p-6 text-sm text-[#595347]">
+              No {statusFilter === 'all' ? '' : TRIP_LIFECYCLE_LABELS[statusFilter].toLowerCase()} trips.
+              Choose another filter to see your trip rooms.
+            </p>
           ) : (
             <div
               style={{
@@ -183,11 +212,13 @@ export default function TripsDashboardPage({
                 gap: 16,
               }}
             >
-              {trips.map((trip) => {
-                const isCollecting = trip.status === 'collecting_constraints';
+              {filteredTrips.map((trip) => {
+                const lifecycle = getTripLifecycleStatus(trip, today);
                 return (
                   <div
                     key={trip.id}
+                    role="group"
+                    aria-label={trip.title}
                     style={{
                       background: '#fff',
                       borderRadius: 14,
@@ -209,21 +240,7 @@ export default function TripsDashboardPage({
                           marginBottom: 12,
                         }}
                       >
-                        <span
-                          style={{
-                            fontSize: 11,
-                            fontWeight: 600,
-                            textTransform: 'uppercase',
-                            letterSpacing: '0.05em',
-                            padding: '3px 8px',
-                            borderRadius: 20,
-                            background: isCollecting ? '#FEF7ED' : '#EEF3ED',
-                            color: isCollecting ? '#C1683F' : PINE,
-                            border: `1px solid ${isCollecting ? '#F6DEC8' : '#D1DFCE'}`,
-                          }}
-                        >
-                          {isCollecting ? 'Collecting constraints' : 'Itinerary planned'}
-                        </span>
+                        <TripStatusBadge status={lifecycle} />
                         <span style={{ fontSize: 12, color: MUTED, fontFamily: 'monospace' }}>
                           #{trip.id.slice(-6)}
                         </span>
@@ -240,6 +257,14 @@ export default function TripsDashboardPage({
                       >
                         {trip.title}
                       </h3>
+
+                      {trip.status === 'flagged' ? (
+                        <p className="mb-2 text-xs font-semibold text-[#8E4726]">Flagged for review</p>
+                      ) : lifecycle !== 'completed' && (
+                        <p className="mb-2 text-xs text-[#595347]">
+                          {trip.status === 'collecting_constraints' ? 'Collecting constraints' : trip.status === 'planned' ? 'Itinerary planned' : 'Travel underway'}
+                        </p>
+                      )}
 
                       <div
                         style={{

@@ -69,6 +69,9 @@ export default function AddExpenseModal({
 
   return (
     <div
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="expense-modal-title"
       style={{
         position: 'fixed',
         inset: 0,
@@ -122,6 +125,7 @@ export default function AddExpenseModal({
             </div>
             <div>
               <h2
+                id="expense-modal-title"
                 style={{
                   ...SERIF,
                   fontSize: 20,

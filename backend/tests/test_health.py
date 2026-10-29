@@ -25,7 +25,7 @@ async def test_readiness_requires_a_working_database() -> None:
     ) as client:
         response = await client.get("/readyz")
     assert response.status_code == 200
-    assert response.json() == {"status": "ready"}
+    assert response.json() == {"status": "ready", "version": "1.0.0"}
 
 
 @pytest.mark.asyncio

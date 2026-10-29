@@ -111,6 +111,26 @@ Frontend web application will be accessible at:
 
 ---
 
+## Trip progress and completion
+
+Trip cards, the room overview, and creator trip settings show travel progress
+separately from itinerary planning status:
+
+- **Upcoming:** the current UTC date is before the trip's start date.
+- **In progress:** today is between the start and end dates, inclusive.
+- **Completed:** the end date has passed, or the creator has marked the trip complete.
+
+Dashboard filters let you view each group, including past trips. Open pages update
+at UTC midnight and when you return to the tab. Creators can finish a trip early
+via **Manage Trip → Trip settings → Mark trip as completed**, with confirmation.
+Failed saves show an error and do not falsely mark the trip completed.
+
+The API includes a read-only `lifecycle_status` computed when trips are read.
+Date-based completion does not overwrite the stored planning/moderation status,
+delete plans or expenses, or change access permissions. Rescheduling a trip
+recalculates its date-based progress; manually completed trips remain completed.
+This computed field requires no database migration or background scheduler.
+
 ## Running Tests & Verification
 
 ### Backend Tests (pytest)

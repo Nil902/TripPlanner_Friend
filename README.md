@@ -44,7 +44,7 @@ Unlike simple prompt-to-text itinerary apps, this system uses an **iterative pro
 ## Prerequisites
 
 - **Python:** `3.11` or higher
-- **Node.js:** `18.0` or higher
+- **Node.js:** `22.12` or higher
 - **npm:** `9.0` or higher
 - **API Keys:**
   - Google Maps Platform API Key (Places API New, Distance Matrix API)
@@ -183,7 +183,10 @@ This runs 6 deterministic scenario fixtures (budget conflicts, transit constrain
 
 ## Documentation
 
-- [Architecture & Design Decisions](file:///Users/nil/Documents/PersonalProject2/ARCHITECTURE.md)
-- [Agent & Subagent Rules](file:///Users/nil/Documents/PersonalProject2/AGENTS.md)
-- [Contributing Guidelines](file:///Users/nil/Documents/PersonalProject2/CONTRIBUTING.md)
-- [Security Policy](file:///Users/nil/Documents/PersonalProject2/SECURITY.md)
+- [Cloud deployment and automatic releases](docs/DEPLOYMENT.md)
+- [Production readiness review and pending security fixes](docs/production-readiness-review.md)
+
+- [Architecture & Design Decisions](ARCHITECTURE.md)
+- [Agent & Subagent Rules](AGENTS.md)
+- [Contributing Guidelines](CONTRIBUTING.md)
+- [Security Policy](SECURITY.md)

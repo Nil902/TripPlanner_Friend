@@ -30,43 +30,34 @@ export default function RebalanceModal({
   const [description, setDescription] = useState('Belem Tower is closed for renovation today');
   const [delayMinutes, setDelayMinutes] = useState(120);
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
   if (!isOpen) return null;
 
   const handleExecute = async () => {
+    if (isSubmitting) return;
     setIsSubmitting(true);
+    setError(null);
     try {
-      await api.plan.rebalance(tripId, {
+      const plan = await api.plan.rebalance(tripId, {
         type: disruptionType,
         day_index: dayIndex,
         delay_minutes: disruptionType === 'flight_delayed' ? delayMinutes : undefined,
         description,
       });
-    } catch {
-      // Offline / fallback calculation
+      onRebalanced({
+        version: plan.version,
+        scenario: disruptionType.replace(/_/g, ' ').toUpperCase(),
+        affectedWindow: `Day ${dayIndex + 1}`,
+        unaffectedDays: 'Other days are preserved in the saved plan version.',
+        substitution: plan.notes.join(' ') || 'The updated itinerary has been saved.',
+      });
+      onClose();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Could not rebalance the itinerary. Please try again.');
+    } finally {
+      setIsSubmitting(false);
     }
-
-    let affectedWindow = `Day ${dayIndex + 1}: Morning Window`;
-    let substitution = 'Swapped in Jeronimos Monastery, same neighborhood, 4 min away.';
-
-    if (disruptionType === 'flight_delayed') {
-      affectedWindow = `Day ${dayIndex + 1}: 9:00 AM – 1:00 PM`;
-      substitution = `Shifted morning sightseeing by ${delayMinutes / 60} hrs and compressed transit buffer.`;
-    } else if (disruptionType === 'weather_alert') {
-      affectedWindow = `Day ${dayIndex + 1}: Afternoon Outdoor activities`;
-      substitution = 'Moved outdoor scenic walk indoors to Calouste Gulbenkian Museum.';
-    }
-
-    onRebalanced({
-      version: 2,
-      scenario: disruptionType.replace('_', ' ').toUpperCase(),
-      affectedWindow,
-      unaffectedDays: 'Day 2 and subsequent days are held invariant & preserved.',
-      substitution,
-    });
-
-    setIsSubmitting(false);
-    onClose();
   };
 
   return (
@@ -158,6 +149,7 @@ export default function RebalanceModal({
 
         {/* Content */}
         <div style={{ padding: 24, overflowY: 'auto' }}>
+          {error && <p role="alert" className="mb-4 rounded-lg bg-red-50 p-3 text-sm text-red-800">{error}</p>}
           {/* Architecture principle highlight */}
           <div
             style={{

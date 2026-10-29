@@ -7,7 +7,7 @@ export interface AddExpenseModalProps {
   isOpen: boolean;
   onClose: () => void;
   members: Member[];
-  onAdd: (expense: ExpenseItem) => void;
+  onAdd: (expense: ExpenseItem) => void | Promise<void>;
 }
 
 export default function AddExpenseModal({
@@ -24,13 +24,16 @@ export default function AddExpenseModal({
     members.map((m) => m.id),
   );
   const [error, setError] = useState<string | null>(null);
+  const [isSaving, setIsSaving] = useState(false);
 
   if (!isOpen) return null;
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (isSaving) return;
+    setError(null);
     const num = parseFloat(amount);
-    if (!desc.trim() || isNaN(num) || num <= 0) {
+    if (!desc.trim() || !Number.isFinite(num) || num <= 0) {
       setError('Please enter a valid description and positive amount.');
       return;
     }
@@ -40,15 +43,22 @@ export default function AddExpenseModal({
       return;
     }
 
-    onAdd({
-      id: `exp-${Date.now()}`,
-      desc: desc.trim(),
-      amount: num,
-      paidBy,
-      category,
-      splitBetween,
-    });
-    onClose();
+    setIsSaving(true);
+    try {
+      await onAdd({
+        id: `exp-${Date.now()}`,
+        desc: desc.trim(),
+        amount: num,
+        paidBy,
+        category,
+        splitBetween,
+      });
+      onClose();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Could not save your expense. Please try again.');
+    } finally {
+      setIsSaving(false);
+    }
   };
 
   const toggleMember = (name: string) => {
@@ -146,6 +156,7 @@ export default function AddExpenseModal({
 
         {error && (
           <div
+            role="alert"
             style={{
               margin: '16px 24px 0',
               padding: '8px 12px',
@@ -163,6 +174,7 @@ export default function AddExpenseModal({
         <form onSubmit={handleSubmit} style={{ padding: 24, overflowY: 'auto' }}>
           <div style={{ marginBottom: 16 }}>
             <label
+              htmlFor="expense-description"
               style={{
                 display: 'block',
                 fontSize: 13,
@@ -174,6 +186,7 @@ export default function AddExpenseModal({
               What was this for?
             </label>
             <input
+              id="expense-description"
               type="text"
               required
               placeholder="e.g. Pasteis tasting or Sintra Train Tickets"
@@ -194,6 +207,7 @@ export default function AddExpenseModal({
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))', gap: 12, marginBottom: 16 }}>
             <div>
               <label
+                htmlFor="expense-amount"
                 style={{
                   display: 'block',
                   fontSize: 13,
@@ -211,6 +225,7 @@ export default function AddExpenseModal({
                   style={{ position: 'absolute', left: 10, top: 11 }}
                 />
                 <input
+                  id="expense-amount"
                   type="number"
                   step="0.01"
                   min="0"
@@ -340,7 +355,9 @@ export default function AddExpenseModal({
             <SecondaryButton type="button" onClick={onClose}>
               Cancel
             </SecondaryButton>
-            <PrimaryButton type="submit">Log Expense</PrimaryButton>
+            <PrimaryButton type="submit" disabled={isSaving}>
+              {isSaving ? 'Saving...' : 'Log Expense'}
+            </PrimaryButton>
           </div>
         </form>
       </div>

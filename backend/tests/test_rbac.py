@@ -6,14 +6,30 @@ import uuid
 
 import pytest
 from httpx import ASGITransport, AsyncClient
+from sqlmodel import Session, select
 
-from app.core.db import init_db
+from app.core.db import engine, init_db
+from app.core.security import hash_password
 from app.main import app
+from app.models.schema import User
 
 
 @pytest.fixture(autouse=True)
-def setup_database():
+def setup_database() -> None:
     init_db()
+    with Session(engine) as session:
+        if not session.exec(
+            select(User).where(User.email == "admin@antigravity.travel")
+        ).first():
+            session.add(
+                User(
+                    email="admin@antigravity.travel",
+                    name="Test Admin",
+                    hashed_password=hash_password("admin12345"),
+                    is_admin=True,
+                )
+            )
+            session.commit()
 
 
 @pytest.mark.asyncio
@@ -73,14 +89,14 @@ async def test_creator_permissions_and_management():
         assert perm_query_data["is_creator"] is True
         assert perm_query_data["role"] == "creator"
 
-        # 5. Creator checks permissions with X-User-Role: creator header
+        # 5. A client-provided role must not grant creator permissions.
         perm_header_resp = await client.get(
             f"/api/v1/trips/{trip_id}/permissions",
             headers={"X-User-Role": "creator"},
         )
         assert perm_header_resp.status_code == 200
-        assert perm_header_resp.json()["can_manage"] is True
-        assert perm_header_resp.json()["role"] == "creator"
+        assert perm_header_resp.json()["can_manage"] is False
+        assert perm_header_resp.json()["role"] == "joiner"
 
         # 6. Creator can update trip with token
         update_resp = await client.put(

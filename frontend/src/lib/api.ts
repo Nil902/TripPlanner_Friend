@@ -120,8 +120,11 @@ async function request<T>(
     init.body = JSON.stringify(body);
   }
 
+  // A failed response does not prove a write was not committed by the server.
+  // Retrying reads is safe; mutations need an explicit user retry.
+  const maxRetries = method === 'GET' ? retries : 0;
   let lastError: unknown;
-  for (let attempt = 0; attempt <= retries; attempt++) {
+  for (let attempt = 0; attempt <= maxRetries; attempt++) {
     try {
       const res = await fetch(`${BASE}${path}`, init);
 
@@ -151,17 +154,13 @@ async function request<T>(
           } catch {
             // response body is not JSON, keep default message
           }
-          throw new Error(message);
+          throw new ApiError(message, res.status);
         }
 
-        // 5xx: eligible for retry
-        const errMsg = `Request failed: ${res.status} ${res.statusText}`;
-        lastError = new Error(errMsg);
-        if (attempt < retries) {
-          await new Promise((resolve) => setTimeout(resolve, 2 ** attempt * 500));
-          continue;
-        }
-        throw lastError;
+        throw new ApiError(
+          `Request failed: ${res.status} ${res.statusText}`,
+          res.status,
+        );
       }
 
       // 204 No Content and 205 Reset Content have empty bodies.
@@ -176,10 +175,10 @@ async function request<T>(
 
       return res.json() as Promise<T>;
     } catch (err) {
-      // AbortError should never retry
       if (err instanceof Error && err.name === 'AbortError') throw err;
+      if (err instanceof ApiError && err.status < 500) throw err;
       lastError = err;
-      if (attempt < retries) {
+      if (attempt < maxRetries) {
         await new Promise((resolve) => setTimeout(resolve, 2 ** attempt * 500));
         continue;
       }
@@ -187,6 +186,13 @@ async function request<T>(
     }
   }
   throw lastError;
+}
+
+class ApiError extends Error {
+  constructor(message: string, readonly status: number) {
+    super(message);
+    this.name = 'ApiError';
+  }
 }
 
 export const api = {

@@ -89,4 +89,50 @@ describe('API Client Methods', () => {
     expect(result.version).toBe(2);
     expect(result.notes).toContain('Refined day 2');
   });
+
+  it('does not retry a rejected read', async () => {
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue({
+      ok: false,
+      status: 403,
+      json: async () => ({ detail: { message: 'Trip access denied' } }),
+    } as Response);
+
+    await expect(api.get('/api/v1/trips/private')).rejects.toThrow('Trip access denied');
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not replay expense creation after a server failure', async () => {
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue({
+      ok: false,
+      status: 503,
+      statusText: 'Service Unavailable',
+    } as Response);
+
+    await expect(api.post('/api/v1/trips/trip-123/expenses', { amount: 25 }))
+      .rejects.toThrow('503');
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not replay a write after a lost connection', async () => {
+    const fetchSpy = vi.spyOn(globalThis, 'fetch')
+      .mockRejectedValue(new TypeError('Failed to fetch'));
+
+    await expect(api.post('/api/v1/trips/trip-123/plan', {}))
+      .rejects.toThrow('Failed to fetch');
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it('retries a temporary read failure once before returning the result', async () => {
+    const fetchSpy = vi.spyOn(globalThis, 'fetch')
+      .mockResolvedValueOnce({ ok: false, status: 503, statusText: 'Unavailable' } as Response)
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        headers: new Headers({ 'content-type': 'application/json' }),
+        json: async () => ({ id: 'trip-123' }),
+      } as Response);
+
+    await expect(api.get('/api/v1/trips/trip-123')).resolves.toEqual({ id: 'trip-123' });
+    expect(fetchSpy).toHaveBeenCalledTimes(2);
+  });
 });

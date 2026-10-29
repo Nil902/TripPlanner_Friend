@@ -1,0 +1,22 @@
+services:
+  - type: web
+    name: tripplanner-friend
+    runtime: docker
+    plan: free
+    region: singapore
+    branch: main
+    dockerfilePath: ./Dockerfile
+    dockerContext: .
+    autoDeployTrigger: checksPass
+    healthCheckPath: /readyz
+    envVars:
+      - key: DATABASE_URL
+        sync: false
+      - key: SECRET_KEY
+        generateValue: true
+      - key: CORS_ORIGINS
+        value: ""
+      - key: LLM_MODEL_NAME
+        value: gemini-3.1-flash-lite
+      - key: MAX_PLANNER_ITERATIONS
+        value: "5"

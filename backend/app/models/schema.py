@@ -7,7 +7,7 @@ from datetime import UTC, date, datetime
 from enum import StrEnum
 from typing import Any
 
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 from sqlmodel import JSON, Column, Field, SQLModel
 
 
@@ -98,6 +98,17 @@ class Constraint(SQLModel, table=True):
     updated_at: datetime = Field(default_factory=utc_now)
 
 
+class TripGuest(SQLModel, table=True):
+    __tablename__ = "trip_guests"
+
+    id: str = Field(
+        default_factory=lambda: f"guest_{uuid.uuid4().hex}", primary_key=True
+    )
+    trip_id: str = Field(foreign_key="trips.id", index=True)
+    name: str = Field(max_length=100)
+    created_at: datetime = Field(default_factory=utc_now)
+
+
 class Place(SQLModel, table=True):
     __tablename__ = "places"
 
@@ -165,13 +176,17 @@ class Expense(SQLModel, table=True):
 
 
 # --- Auth ---
-class SignupRequest(BaseModel):
+class APIRequest(BaseModel):
+    model_config = ConfigDict(allow_inf_nan=False, str_max_length=4000)
+
+
+class SignupRequest(APIRequest):
     email: str
     password: str
     name: str
 
 
-class LoginRequest(BaseModel):
+class LoginRequest(APIRequest):
     email: str
     password: str
 
@@ -192,15 +207,15 @@ class AuthResponse(BaseModel):
 
 
 # --- Trips ---
-class CreateTripRequest(BaseModel):
+class CreateTripRequest(APIRequest):
     title: str
     destination: str
     start_date: date
     end_date: date
-    creator_id: str
+    creator_id: str | None = None
 
 
-class UpdateTripRequest(BaseModel):
+class UpdateTripRequest(APIRequest):
     title: str | None = None
     destination: str | None = None
     start_date: date | None = None
@@ -215,12 +230,13 @@ class MemberResponse(BaseModel):
     initials: str
     submitted: bool = False
     role: str = "joiner"
+    session_token: str | None = None
 
     model_config = {"from_attributes": True}
 
 
-class JoinTripRequest(BaseModel):
-    name: str
+class JoinTripRequest(APIRequest):
+    name: str = Field(min_length=1, max_length=100)
     user_id: str | None = None
 
 
@@ -233,7 +249,7 @@ class TripPermissionsResponse(BaseModel):
 
 
 # --- Constraints ---
-class SubmitConstraintRequest(BaseModel):
+class SubmitConstraintRequest(APIRequest):
     user_id: str
     budget_per_day: float
     dietary: list[str] | None = None
@@ -287,7 +303,7 @@ class PlanResponse(BaseModel):
     model_config = {"from_attributes": True}
 
 
-class CreatePlanItemRequest(BaseModel):
+class CreatePlanItemRequest(APIRequest):
     day_index: int
     place_name: str
     category: str = "attraction"
@@ -298,7 +314,7 @@ class CreatePlanItemRequest(BaseModel):
     lng: float | None = 0.0
 
 
-class UpdatePlanItemRequest(BaseModel):
+class UpdatePlanItemRequest(APIRequest):
     day_index: int | None = None
     place_name: str | None = None
     category: str | None = None
@@ -309,12 +325,12 @@ class UpdatePlanItemRequest(BaseModel):
     lng: float | None = None
 
 
-class RefinePlanRequest(BaseModel):
+class RefinePlanRequest(APIRequest):
     instruction: str
     user_id: str | None = None
 
 
-class AskAgentRequest(BaseModel):
+class AskAgentRequest(APIRequest):
     question: str
 
 
@@ -324,7 +340,7 @@ class AskAgentResponse(BaseModel):
 
 
 # --- Disruption & Rebalance ---
-class DisruptionEvent(BaseModel):
+class DisruptionEvent(APIRequest):
     type: DisruptionType
     day_index: int
     place_id: str | None = None
@@ -333,7 +349,7 @@ class DisruptionEvent(BaseModel):
 
 
 # --- Expenses & Settle-Up ---
-class CreateExpenseRequest(BaseModel):
+class CreateExpenseRequest(APIRequest):
     paid_by: str
     amount: float
     description: str
@@ -341,7 +357,7 @@ class CreateExpenseRequest(BaseModel):
     split_between: list[str] | None = None
 
 
-class UpdateExpenseRequest(BaseModel):
+class UpdateExpenseRequest(APIRequest):
     paid_by: str | None = None
     amount: float | None = None
     description: str | None = None

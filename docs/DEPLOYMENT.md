@@ -2,11 +2,15 @@
 
 ## Current release status
 
-**Do not deploy this branch yet.** Authentication and trip authorization changes
-are awaiting the owner's confirmation required by `SECURITY.md`. The container
-smoke check in CI deliberately requires anonymous trip listing to return `401`.
-The current API returns `200`, so that check blocks publication until the reviewed
-security fixes are implemented. See [the security review](production-readiness-review.md).
+The owner authorized the documented security fixes by requesting deployment.
+Verified trip permissions and signed guest sessions are implemented. Anonymous
+trip listing must return `401`, and public API documentation must be disabled;
+CI checks both before release. See [the security review](production-readiness-review.md).
+Live publication requires the owner's connected hosting accounts and the finished
+branch to be pushed and merged into the GitHub deployment branch.
+For work that should continue while the laptop is asleep, follow the
+[Codex Cloud handoff](CLOUD_HANDOFF.md). Local changes must be published before
+a remote coding task can use them.
 
 ## Hosting
 
@@ -50,6 +54,9 @@ API keys and database credentials belong in Render environment settings.
 Do not paste them into source files, GitHub workflow files, or chat messages.
 An admin account is not created by default. Configure `ADMIN_EMAIL` and a strong
 `ADMIN_PASSWORD` in Render only if the owner needs the administration portal.
+The bootstrap password must be at least 16 characters. `ENVIRONMENT=production`
+requires PostgreSQL, a persistent signing key, HTTPS CORS origins when configured,
+and enabled rate limits. These checks fail startup on unsafe configuration.
 
 ## GitHub workflow
 
@@ -79,6 +86,12 @@ On startup the container runs `alembic upgrade head` and starts one Uvicorn
 worker as an unprivileged user. A failed migration stops startup. `/healthz`
 checks the process; `/readyz` verifies database access and is Render's deployment
 health check. Only runtime Python dependencies are included in the image.
+
+The application limits public login/signup/join attempts and AI requests, caps
+request bodies at 64 KiB, and allows one planning operation per trip at a time.
+These in-memory limits target the configured single-worker service. Multi-worker
+or multi-instance hosting requires shared rate and concurrency storage first.
+Guest sessions expire after the configured token lifetime and must be rejoined.
 
 ## Verify a deployed release
 

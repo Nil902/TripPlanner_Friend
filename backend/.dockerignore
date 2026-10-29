@@ -15,6 +15,5 @@ build/
 tests/
 *.db
 *.sqlite
-alembic/
 .git/
 .gitignore

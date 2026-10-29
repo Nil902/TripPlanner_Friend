@@ -1,14 +1,42 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { api } from './api';
+import { api, getGuestSession, setGuestSession, setAuthToken } from './api';
 
 describe('API Client Methods', () => {
   beforeEach(() => {
     vi.restoreAllMocks();
+    localStorage.clear();
   });
 
   it('generates the correct export ics URL', () => {
     const url = api.plan.getExportIcsUrl('trip-123');
     expect(url).toContain('/api/v1/trips/trip-123/plan/export.ics');
+  });
+
+  it('uses a signed guest credential only for its joined trip', async () => {
+    setGuestSession({ tripId: 'trip-123', memberId: 'guest-1', name: 'Guest', initials: 'GU', token: 'signed-guest-token' });
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue({
+      ok: true, status: 200, headers: new Headers({ 'content-type': 'application/json' }), json: async () => ({}),
+    } as Response);
+    await api.plan.get('trip-123');
+    expect(fetchSpy.mock.calls[0][1]?.headers).toHaveProperty('Authorization', 'Bearer signed-guest-token');
+    await api.plan.get('another-trip');
+    expect(fetchSpy.mock.calls[1][1]?.headers).not.toHaveProperty('Authorization');
+    setAuthToken('account-token');
+    await api.plan.get('trip-123');
+    expect(fetchSpy.mock.calls[2][1]?.headers).toHaveProperty('Authorization', 'Bearer account-token');
+  });
+
+  it('requires an unsigned legacy guest to rejoin', () => {
+    localStorage.setItem('ag_guest_session', JSON.stringify({ tripId: 'trip-123', memberId: 'alice', name: 'Alice', initials: 'AL' }));
+    expect(getGuestSession()).toBeNull();
+  });
+
+  it('downloads a calendar with authentication without exposing its token in the URL', async () => {
+    setAuthToken('private-account-token');
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue({ ok: true, status: 200, text: async () => 'BEGIN:VCALENDAR\r\nEND:VCALENDAR' } as Response);
+    await expect(api.plan.exportIcs('trip-123')).resolves.toContain('BEGIN:VCALENDAR');
+    expect(fetchSpy.mock.calls[0][0]).not.toContain('private-account-token');
+    expect(fetchSpy.mock.calls[0][1]?.headers).toHaveProperty('Authorization', 'Bearer private-account-token');
   });
 
   it('returns empty object for 204 No Content without calling .json()', async () => {

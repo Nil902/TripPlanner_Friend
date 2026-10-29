@@ -257,8 +257,6 @@ def delete_trip_admin(
     admin: User = Depends(get_current_admin_user),
 ) -> dict[str, str]:
     """Administrative force deletion of a trip with full cascade."""
-    from app.models.schema import Constraint, Expense, PlanItem
-
     trip = session.get(Trip, trip_id)
     if not trip:
         raise HTTPException(
@@ -269,30 +267,9 @@ def delete_trip_admin(
             },
         )
 
-    # Manually cascade: PlanItems -> Plans -> Constraints -> Expenses -> Trip
-    trip_plans = session.exec(select(Plan).where(Plan.trip_id == trip_id)).all()
-    for plan in trip_plans:
-        plan_items = session.exec(
-            select(PlanItem).where(PlanItem.plan_id == plan.id)
-        ).all()
-        for item in plan_items:
-            session.delete(item)
-        session.delete(plan)
+    from app.services.trip_service import delete_trip_records
 
-    constraints_to_delete = session.exec(
-        select(Constraint).where(Constraint.trip_id == trip_id)
-    ).all()
-    for c in constraints_to_delete:
-        session.delete(c)
-
-    expenses_to_delete = session.exec(
-        select(Expense).where(Expense.trip_id == trip_id)
-    ).all()
-    for e in expenses_to_delete:
-        session.delete(e)
-
-    session.delete(trip)
-    session.commit()
+    delete_trip_records(session, trip)
     return {"status": "deleted", "trip_id": trip_id}
 
 

@@ -6,6 +6,7 @@ import pytest
 from httpx import ASGITransport, AsyncClient
 
 from app.main import app
+from tests.factories import account_headers, join_member
 
 
 @pytest.mark.asyncio
@@ -14,6 +15,7 @@ async def test_expense_settle_up_flow():
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as client:
         # Create trip with 3 members
+        client.headers.update(account_headers("alice"))
         trip_res = await client.post(
             "/api/v1/trips",
             json={
@@ -26,14 +28,19 @@ async def test_expense_settle_up_flow():
         )
         trip_id = trip_res.json()["id"]
 
-        # Add bob and charlie via constraints
+        bob_headers = await join_member(client, trip_id, "bob")
+        charlie_headers = await join_member(client, trip_id, "charlie")
+
+        # Submit each member's constraints using their own verified identity
         await client.post(
             f"/api/v1/trips/{trip_id}/constraints",
             json={"user_id": "bob", "budget_per_day": 80.0},
+            headers=bob_headers,
         )
         await client.post(
             f"/api/v1/trips/{trip_id}/constraints",
             json={"user_id": "charlie", "budget_per_day": 80.0},
+            headers=charlie_headers,
         )
 
         # Expense 1: Alice pays $90 for dinner split between alice, bob, charlie ($30 each)
@@ -61,7 +68,7 @@ async def test_expense_settle_up_flow():
         )
         exp2_id = exp2_res.json()["id"]
 
-        # Edit expense 2 to test "allow all the edit"
+        # Edit expense 2 as the trip manager
         await client.put(
             f"/api/v1/trips/{trip_id}/expenses/{exp2_id}",
             json={"amount": 40.0},

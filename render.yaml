@@ -10,6 +10,8 @@ services:
     autoDeployTrigger: checksPass
     healthCheckPath: /readyz
     envVars:
+      - key: ENVIRONMENT
+        value: production
       - key: DATABASE_URL
         sync: false
       - key: SECRET_KEY

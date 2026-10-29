@@ -2,7 +2,7 @@ import pytest
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy.exc import OperationalError
 
-from app.core.db import engine
+from app.core.db import engine, get_session
 from app.main import app
 
 
@@ -43,3 +43,20 @@ async def test_readiness_returns_a_redacted_failure(
     assert response.status_code == 503
     assert response.json()["detail"]["code"] == "DATABASE_UNAVAILABLE"
     assert "private-connection-details" not in response.text
+
+
+@pytest.mark.asyncio
+async def test_unexpected_errors_return_structured_redacted_details(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def broken_session() -> None:
+        raise RuntimeError("synthetic-private-connection-data")
+
+    monkeypatch.setitem(app.dependency_overrides, get_session, broken_session)
+    transport = ASGITransport(app=app, raise_app_exceptions=False)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        response = await client.get("/api/v1/trips")
+    assert response.status_code == 500
+    assert response.json()["detail"]["code"] == "INTERNAL_ERROR"
+    assert response.headers["x-request-id"] == response.json()["detail"]["request_id"]
+    assert "synthetic-private-connection-data" not in response.text

@@ -6,6 +6,7 @@ import pytest
 from httpx import ASGITransport, AsyncClient
 
 from app.main import app
+from tests.factories import account_headers, join_member
 
 
 @pytest.mark.asyncio
@@ -14,6 +15,7 @@ async def test_full_trip_and_planning_lifecycle():
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as client:
         # 1. Create a trip
+        client.headers.update(account_headers("creator_1"))
         trip_payload = {
             "title": "Lisbon Culinary & Culture Escape",
             "destination": "Lisbon, Portugal",
@@ -28,13 +30,16 @@ async def test_full_trip_and_planning_lifecycle():
         assert trip["destination"] == "Lisbon, Portugal"
         assert trip["status"] == "collecting_constraints"
 
-        # 2. Update trip (always allow all the edit)
+        # 2. Update trip (as the authenticated creator)
         update_res = await client.put(
             f"/api/v1/trips/{trip_id}",
             json={"title": "Updated Lisbon Expedition"},
         )
         assert update_res.status_code == 200
         assert update_res.json()["title"] == "Updated Lisbon Expedition"
+
+        alice_headers = await join_member(client, trip_id, "alice")
+        bob_headers = await join_member(client, trip_id, "bob")
 
         # 3. Submit constraints for 2 members (Alice and Bob)
         alice_c = {
@@ -53,8 +58,12 @@ async def test_full_trip_and_planning_lifecycle():
             "must_see": ["Belém Tower"],
             "must_avoid": ["nightclub"],
         }
-        res_a = await client.post(f"/api/v1/trips/{trip_id}/constraints", json=alice_c)
-        res_b = await client.post(f"/api/v1/trips/{trip_id}/constraints", json=bob_c)
+        res_a = await client.post(
+            f"/api/v1/trips/{trip_id}/constraints", json=alice_c, headers=alice_headers
+        )
+        res_b = await client.post(
+            f"/api/v1/trips/{trip_id}/constraints", json=bob_c, headers=bob_headers
+        )
         assert res_a.status_code == 200
         assert res_b.status_code == 200
 
@@ -78,7 +87,7 @@ async def test_full_trip_and_planning_lifecycle():
         val_data = val_res.json()
         assert "is_valid" in val_data
 
-        # 6. Add custom plan item (Always allow all the edit)
+        # 6. Add custom plan item (as the authenticated creator)
         first_item = plan["days"][0]["items"][0]
         custom_item = {
             "day_index": 0,
@@ -96,7 +105,7 @@ async def test_full_trip_and_planning_lifecycle():
         assert add_res.status_code == 200
         added_id = add_res.json()["id"]
 
-        # Edit existing item (Always allow all the edit)
+        # Edit existing item (as the authenticated creator)
         edit_res = await client.put(
             f"/api/v1/trips/{trip_id}/plan/items/{first_item['id']}",
             json={"cost": 0.0, "place_name": "Free Morning Walk"},

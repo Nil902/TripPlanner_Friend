@@ -70,7 +70,6 @@ export const rbacMiddleware: MiddlewareFn = (ctx) => {
   if (ctx.screen === 'owner') {
     const isJoiner = ctx.currentUser?.role === 'joiner';
     const isCreator =
-      ctx.currentUser?.role === 'creator' ||
       (ctx.currentUser &&
         ctx.activeTrip &&
         ctx.currentUser.id === ctx.activeTrip.creator_id);

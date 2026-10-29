@@ -36,6 +36,7 @@ export default function PlansPage({
   const [saved, setSaved] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [constraints, setConstraints] = useState<Constraint[]>([]);
+  const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     if (currentMemberId) {
@@ -62,8 +63,8 @@ export default function PlansPage({
           }
         }
       })
-      .catch(() => {
-        // Fallback for offline/mock
+      .catch((err: unknown) => {
+        setError(err instanceof Error ? err.message : 'Could not load your preferences. Please try again.');
       });
   }, [tripId, activeUser]);
 
@@ -95,6 +96,9 @@ export default function PlansPage({
   };
 
   const handleSave = async () => {
+    if (isSubmitting) return;
+    setError(null);
+    setSaved(false);
     setIsSubmitting(true);
     try {
       await api.constraints.submit(tripId, {
@@ -106,12 +110,12 @@ export default function PlansPage({
         must_avoid: mustAvoid ? mustAvoid.split(',').map((s) => s.trim()).filter(Boolean) : [],
       });
       loadConstraints();
-    } catch {
-      // offline fallback
-    } finally {
-      setIsSubmitting(false);
       setSaved(true);
       setTimeout(() => setSaved(false), 3000);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Your preferences could not be saved. Please try again.');
+    } finally {
+      setIsSubmitting(false);
     }
   };
 
@@ -134,6 +138,7 @@ export default function PlansPage({
       </p>
 
       {/* Persona Selector */}
+      {error && <p role="alert" className="mb-4 rounded-lg bg-red-50 p-3 text-sm text-red-800">{error}</p>}
       <div
         style={{
           padding: '12px 16px',
@@ -160,6 +165,7 @@ export default function PlansPage({
                 key={m.id}
                 type="button"
                 onClick={() => setActiveUser(m.id)}
+                disabled={m.id !== currentMemberId}
                 style={{
                   padding: '5px 12px',
                   borderRadius: 8,

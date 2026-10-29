@@ -85,7 +85,7 @@ export default function OverviewPage({
   setActive,
   planMode,
   setPlanMode,
-  isCreator = true,
+  isCreator = false,
   onOpenAdmin,
 }: OverviewPageProps) {
   const [copied, setCopied] = useState(false);
@@ -96,6 +96,7 @@ export default function OverviewPage({
   const qrCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const [isGenerating, setIsGenerating] = useState(false);
   const [generationStep, setGenerationStep] = useState<string | null>(null);
+  const [actionError, setActionError] = useState<string | null>(null);
 
   // Manual "Plan it yourself" destination visit form state
   const [manualDay, setManualDay] = useState<number>(1);
@@ -168,6 +169,7 @@ export default function OverviewPage({
 
   const handleAddManualStop = async (e: React.FormEvent) => {
     e.preventDefault();
+    setActionError(null);
     if (!manualName.trim() || isSubmittingManual) return;
     setIsSubmittingManual(true);
     setManualSuccessMsg(null);
@@ -206,22 +208,8 @@ export default function OverviewPage({
       const nextHour = (hours + 2) % 24;
       setManualTime(`${nextHour.toString().padStart(2, '0')}:${minutes.toString().padStart(2, '0')}`);
       setTimeout(() => setManualSuccessMsg(null), 4000);
-    } catch {
-      // Offline fallback
-      setManualStops((prev) => [
-        ...prev,
-        {
-          id: `manual-${Date.now()}`,
-          day: manualDay,
-          name: manualName.trim(),
-          time: manualTime,
-          cost: costNum,
-          category: manualCategory,
-        },
-      ]);
-      setManualSuccessMsg(`Added "${manualName.trim()}" to Day ${manualDay}!`);
-      setManualName('');
-      setTimeout(() => setManualSuccessMsg(null), 4000);
+    } catch (err) {
+      setActionError(err instanceof Error ? err.message : 'The visit could not be saved. Please try again.');
     } finally {
       setIsSubmittingManual(false);
     }
@@ -229,12 +217,12 @@ export default function OverviewPage({
 
   const handleDeleteManualStop = async (stopId?: string) => {
     if (!stopId) return;
+    setActionError(null);
     try {
-      if (!stopId.startsWith('manual-')) {
-        await api.plan.deleteItem(trip.id, stopId);
-      }
-    } catch {
-      // ignore
+      await api.plan.deleteItem(trip.id, stopId);
+    } catch (err) {
+      setActionError(err instanceof Error ? err.message : 'The visit could not be deleted.');
+      return;
     }
     setManualStops((prev) => prev.filter((s) => s.id !== stopId));
   };
@@ -361,31 +349,18 @@ export default function OverviewPage({
 
 
   const handleGenerate = async () => {
+    if (isGenerating) return;
+    setActionError(null);
     setIsGenerating(true);
-    setGenerationStep('Gathering member budget & dietary constraints...');
-
-    setTimeout(() => {
-      setGenerationStep('Calling Google Places API for verified venues...');
-    }, 500);
-
-    setTimeout(() => {
-      setGenerationStep('Validating travel times via Distance Matrix...');
-    }, 1000);
-
-    setTimeout(() => {
-      setGenerationStep('Resolving schedule & converging on optimal plan...');
-    }, 1500);
-
+    setGenerationStep('Preparing your itinerary...');
     try {
       await api.plan.generate(trip.id);
-    } catch {
-      // Keep rich fallback notes
+      setActive('itinerary');
+    } catch (err) {
+      setActionError(err instanceof Error ? err.message : 'The itinerary could not be generated. Please try again.');
     } finally {
-      setTimeout(() => {
-        setIsGenerating(false);
-        setGenerationStep(null);
-        setActive('itinerary');
-      }, 2000);
+      setIsGenerating(false);
+      setGenerationStep(null);
     }
   };
 
@@ -403,6 +378,7 @@ export default function OverviewPage({
 
   return (
     <div style={{ animation: 'fadeIn 0.4s ease-out' }}>
+      {actionError && <p role="alert" className="mb-4 rounded-lg bg-red-50 p-3 text-sm text-red-800">{actionError}</p>}
       {/* Header */}
       <div
         style={{
@@ -671,7 +647,7 @@ export default function OverviewPage({
       </div>
 
       {/* Plan It Yourself: Manual Destination Visit Form */}
-      {planMode === 'manual' && (
+      {planMode === 'manual' && isCreator && (
         <div
           style={{
             border: `1.5px solid ${PINE}`,
@@ -988,7 +964,7 @@ export default function OverviewPage({
         {planMode === 'ai' ? (
           <PrimaryButton
             onClick={handleGenerate}
-            disabled={isGenerating}
+            disabled={isGenerating || !isCreator}
             style={{ padding: '12px 24px' }}
           >
             {isGenerating ? (

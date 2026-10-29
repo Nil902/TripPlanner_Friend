@@ -13,7 +13,7 @@ from app.core.config import settings
 def test_migrations_create_the_current_schema(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    database_url = f"sqlite:///{tmp_path / 'migrations.db'}"
+    database_url = f"sqlite:///{tmp_path / 'migrations%test.db'}"
     monkeypatch.setattr(settings, "DATABASE_URL", database_url)
     config = Config(str(Path(__file__).resolve().parents[1] / "alembic.ini"))
     command.upgrade(config, "head")

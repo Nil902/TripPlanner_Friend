@@ -1,121 +1,94 @@
 # Production readiness review
 
-Reviewed against the current `main` checkout on 2026-10-29. Changes are being
-prepared on `chore/production-readiness`.
+Reviewed on 2026-10-29. Work is on `chore/production-readiness`.
+The owner authorized the documented security fixes by requesting deployment.
 
-## Confirmed release blockers
+## Release status
 
-1. **API authorization:** trip listing, trip creation, constraint submission,
-   itinerary changes, rebalance, and expenses accept unauthenticated requests.
-   Trip update/delete permit requests when no authenticated identity is present.
-   Caller-controlled roles and user IDs are used in permission decisions.
-2. **Cross-trip edits:** itinerary item update/delete look up an item by its ID
-   without verifying that its plan belongs to the trip in the request URL.
-3. **Guest impersonation:** joining a trip accepts a caller-supplied member ID.
-   Guests do not receive a signed credential that proves their membership.
-4. **Database migrations:** the initial migration lacks the `users.is_admin`
-   column and `FLAGGED` trip status used by the current application. Production
-   startup uses `create_all`, which cannot upgrade existing PostgreSQL tables.
-5. **Deployment configuration:** Docker Compose defaults to a known signing
-   secret and wildcard CORS. The frontend and backend are separate containers;
-   there is no cloud deployment manifest or continuous deployment configuration.
-6. **Client retries:** the fetch wrapper retries writes after network/server
-   failures and retries client errors because they are caught by the outer
-   catch. This can duplicate expenses, registrations, and AI plan generations.
-7. **Credential exposure risk in error logging:** Gemini keys are included in
-   request URLs, and some HTTP failures are logged with their exception text.
-8. **Verification:** baseline backend results are 45 passing tests and one
-   failing permission test. Frontend lint fails on an unused catch parameter.
-   Backend lint, formatting, and type checking pass.
+The application security changes are implemented. Local tests, production builds,
+and migration checks pass. Live deployment still requires connected Render and
+Neon accounts and publication of the finished branch to the GitHub deployment
+branch. No cloud resources have been created, and no source has been pushed.
 
-## Proposed security changes for owner review
+## Changes
 
-The repository's `SECURITY.md` requires explicit confirmation before changing
-authentication, permissions, environment configuration, or GitHub workflows.
-The proposed changes are:
+- Trip creation requires a verified account. The authenticated account determines
+  ownership, and ordinary accounts list only their own or joined trips.
+- Shared API dependencies enforce trip membership for private data, expenses,
+  calendar exports, and advisory AI. Creator/admin access is required for trip
+  management and itinerary changes. Query parameters and supplied role headers
+  cannot grant access.
+- Invitation joins retain signup-free participation. Guests receive opaque IDs
+  and signed, expiring credentials scoped to one trip. Names are stored in a
+  dedicated guest table. Guests can submit only their own preferences.
+- Stop updates/deletes verify the parent plan belongs to the authorized trip and
+  reject edits to historical versions. Editing a shared catalog place creates
+  a private copy for that stop instead of altering other trips or plan history.
+- Expenses reject non-finite values and invalid or duplicate split members.
+  Expense updates/deletion require the payer or trip manager. The settlement
+  and budget algorithms have not been changed.
+- Public authentication/join requests and AI requests have application rate
+  limits. Bodies are limited to 64 KiB. One planning request per trip and at
+  most four simultaneous AI requests are admitted by the single worker.
+- Production settings require PostgreSQL, a persistent signing key, enabled rate
+  limits, and exact HTTPS CORS origins when configured. Public interactive API
+  documentation is disabled. Credentials are hidden from configuration errors.
+- Gemini authenticates through a header rather than a query parameter. HTTP logs
+  redact credentials, and provider failures do not log raw response bodies or
+  exception messages containing request secrets.
+- The fetch client retries reads only. Trip, preference, expense, and rebalance
+  failures are shown to the user instead of being presented as saved data.
+- Manual visits, itinerary generation, and member removal show failed requests
+  without inventing saved data or successful plan versions. The nonfunctional
+  version-switch action is removed; earlier plan records remain preserved.
+- The frontend uses verified guest IDs, sends guest credentials only to the
+  joined trip, exports calendars with authentication headers, and hides creator
+  controls from joiners. Unsigned old guest sessions must rejoin.
+- Database migrations add the previously missing admin column/moderation status
+  and the guest table. Explicit transactional child-before-parent deletes fix
+  PostgreSQL foreign-key failures. SQLite now enforces foreign keys too.
+- Runtime dependencies are pinned and excluded from development tooling in the
+  production image. The legacy backend Docker build includes its migration files
+  and runtime requirements. Local Compose no longer defaults to a known signing
+  secret or wildcard CORS; database/cache host ports bind to loopback.
+- The shared OpenAPI contract is regenerated from the actual API. Its TypeScript
+  interfaces and frontend consumers reflect the updated requests and guest
+  response.
+- GitHub CI verifies lint, types, tests, dependency advisories, PostgreSQL schema
+  upgrades, the production container, and authenticated PostgreSQL write flows.
+  The Render Blueprint deploys `main` after GitHub checks pass.
 
-- Require a verified account to create trips; use that account's ID as creator.
-  List only trips belonging to the verified account.
-- Add shared API dependencies for trip members and trip managers. Use verified
-  credentials and database membership, never client-provided roles or user IDs.
-  Require creator/admin access for trip management and itinerary mutation;
-  require membership for trip data, expenses, and advisory AI requests.
-- Preserve joining by invitation without signup. Issue an expiring, signed,
-  trip-scoped guest credential and store a guest's display name separately.
-  Guests can submit their own constraints and read their joined trip; they
-  cannot impersonate creators or joiners of another trip.
-- Verify itinerary items belong to the authorized trip before edits or deletion.
-  Validate expense participants on update as well as creation, without changing
-  the protected settlement or budget algorithms.
-- Bound public authentication/join requests and costly AI requests with rate
-  limits in the application, including when Nginx is not used.
-- Validate production configuration, use a persistent signing secret supplied
-  by the host, reject wildcard CORS, disable public interactive API docs in
-  production, and keep secrets in host environment variables.
-- Update the existing GitHub workflow to run isolated tests, PostgreSQL migration
-  checks, dependency audits, and production builds. Configure Render to deploy
-  `main` only after those checks pass.
-- Add regression tests for missing/forged credentials, unrelated users,
-  trip-scoped guests, cross-trip item edits, and deployment behavior.
+## Verification
 
-No real credentials or existing production data are needed for these changes.
-Existing unsigned guest sessions will need to rejoin using their invitation.
+- Backend: lint, formatting, types, and **99 passing tests**, including access,
+  impersonation, cross-trip editing, request guards, and credential redaction.
+- Frontend: lint, types, production build, and **90 passing tests**.
+- The backend suite also passes inside the Linux/Python 3.12 container.
+- Runtime and frontend dependency audits report zero known vulnerabilities.
+- Fresh PostgreSQL upgrades, repeat upgrades, and Alembic schema parity pass.
+- The container's production access gate passes: anonymous trip listing returns
+  `401`, missing API/assets return `404`, and public API docs are disabled.
+- PostgreSQL lifecycle verification covers signup/login, invitation joining,
+  own-member constraints, versioned planning/rebalance, authenticated calendar
+  export, expenses, settlement, and authorized trip deletion.
+- A limited source scan found no API-key or private-key patterns. This is not
+  a guarantee about every credential format or all Git history.
 
-## Hosting proposal
+## Deployment and limits
 
-Use one free Render web service to serve FastAPI and the built React SPA from
-the same HTTPS origin, with a separate free Neon PostgreSQL database. The
-database must be external because the Render free service filesystem is
-ephemeral. Do not use Render's free PostgreSQL tier for durable deployment;
-it expires after 30 days.
+Use the free Render web service and external free Neon PostgreSQL described in
+[the deployment guide](DEPLOYMENT.md). The SPA and API share one HTTPS origin.
+Secrets belong in the host environment; `SECRET_KEY` must persist across deploys.
+Gemini and Google Maps keys are optional; without them planning uses the existing
+destination catalog, estimates, and deterministic fallback.
 
-Use a checked-in Render Blueprint and the existing GitHub repository. Keep the
-database URL, signing secret, and optional Gemini/Google Maps keys exclusively
-in Render environment settings. Preserve plan version history. Apply Alembic
-upgrades before starting the application and verify database readiness.
+Free Render hosting has cold starts and usage quotas, and has no production SLA.
+The in-memory rate/concurrency guards support the configured single-worker
+deployment; multiple workers or instances require shared coordination first.
+Invitation codes confer the ability to join their trip, and guest sessions
+expire after the configured token lifetime. Admin API usage/cost figures are
+estimates rather than provider billing records.
 
-Free hosting has cold starts, usage quotas, and no production availability
-guarantee. This configuration targets a small, low-traffic application.
-
-Provisioning and live verification require the owner's connected Render and
-Neon accounts. Publishing source depends on the owner's push preference.
-
-## Implemented while security review is pending
-
-- Upgraded Vite, its React plugin, Vitest, and their lockfile; the frontend
-  dependency audit now reports zero vulnerabilities.
-- Fixed client retry behavior so failed writes are not replayed and client
-  errors are not retried.
-- Trip creation and expense creation keep unsaved forms open on failure.
-  Rebalance reports the real saved version and notes instead of fabricated
-  success data. Added corresponding regression tests.
-- Isolated backend tests in disposable databases with external API keys disabled.
-  Removed a test's incorrect expectation that a caller-supplied role should
-  grant management access, and removed test ordering dependence for admin setup.
-- Added an additive migration for the existing `is_admin` field and `FLAGGED`
-  status, with SQLite upgrade and schema-parity coverage.
-- Added same-origin static hosting, database readiness checks, a non-root
-  production container, pinned runtime dependencies, and a Render Blueprint.
-- Added the explicitly requested CI/CD configuration. Its production smoke gate
-  currently blocks deployment because anonymous trip listing remains open.
-- The Python dependency audit identified an outdated certificate bundle;
-  `certifi` has been updated to its patched release.
-
-Authentication, guest credentials, permission routines, protected environment
-configuration, and settlement math have not been modified. They remain part of
-the pending security review. No cloud resources have been provisioned.
-
-## Verification of the prepared changes
-
-- Backend lint, formatting, and type checking pass; **56 tests pass**.
-- Frontend lint, type checking, production build, and **78 tests pass**.
-- npm and the Python production dependency audits report **zero known
-  vulnerabilities**, including an audit of the Linux/Python 3.12 image.
-- The production image builds for `linux/amd64` and serves the SPA, assets, deep
-  links, and database readiness successfully against disposable PostgreSQL.
-- Fresh PostgreSQL migrations, repeat upgrades, and `alembic check` pass.
-- The production authorization gate **fails**, as intended for the current
-  unprotected API: anonymous `GET /api/v1/trips` returns `200` instead of `401`.
-  The release remains blocked until the owner's approved fixes are implemented.
-- The prepared source scan found no API-key or private-key patterns. This is
-  a limited source scan, not a guarantee about credentials or all Git history.
+For remote continuation, see [the Codex Cloud handoff](CLOUD_HANDOFF.md).
+No published Codex Cloud environment was available during the local check;
+creating a handoff document does not start a remote task.

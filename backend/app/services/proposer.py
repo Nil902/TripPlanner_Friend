@@ -303,7 +303,7 @@ def call_gemini_proposer(
         full_prompt = "\n\n".join(prompt_parts)
         url = (
             f"https://generativelanguage.googleapis.com/v1beta/models/"
-            f"{settings.LLM_MODEL_NAME}:generateContent?key={settings.GEMINI_API_KEY}"
+            f"{settings.LLM_MODEL_NAME}:generateContent"
         )
         payload = {
             "contents": [{"parts": [{"text": full_prompt}]}],
@@ -316,7 +316,11 @@ def call_gemini_proposer(
         for attempt in range(3):  # spec 9.3: retry with exponential backoff
             try:
                 with httpx.Client(timeout=10.0) as client:
-                    res = client.post(url, json=payload)
+                    res = client.post(
+                        url,
+                        json=payload,
+                        headers={"x-goog-api-key": settings.GEMINI_API_KEY},
+                    )
                 if res.status_code == 200:
                     data = res.json()
                     candidates = data.get("candidates", [])
@@ -428,17 +432,17 @@ def call_gemini_proposer(
                 if attempt < 2:
                     backoff = (2**attempt) * 1.5
                     logger.warning(
-                        f"Gemini LLM attempt {attempt + 1} failed ({exc}); retrying in {backoff:.1f}s..."
+                        f"Gemini LLM attempt {attempt + 1} failed ({type(exc).__name__}); retrying in {backoff:.1f}s..."
                     )
                     time.sleep(backoff)
                 else:
                     logger.warning(
-                        f"Gemini LLM proposal failed after 3 attempts ({exc}). "
+                        f"Gemini LLM proposal failed after 3 attempts ({type(exc).__name__}). "
                         "Falling back to heuristic proposer."
                     )
     except Exception as exc:
         logger.warning(
-            f"Gemini LLM proposal failed ({exc}). Falling back to heuristic proposer."
+            f"Gemini LLM proposal failed ({type(exc).__name__}). Falling back to heuristic proposer."
         )
 
     return None
@@ -685,7 +689,7 @@ def call_gemini_ask(
         full_prompt = "\n\n".join(prompt_parts)
         url = (
             f"https://generativelanguage.googleapis.com/v1beta/models/"
-            f"{settings.LLM_MODEL_NAME}:generateContent?key={settings.GEMINI_API_KEY}"
+            f"{settings.LLM_MODEL_NAME}:generateContent"
         )
         payload = {
             "contents": [{"parts": [{"text": full_prompt}]}],
@@ -698,7 +702,11 @@ def call_gemini_ask(
         for attempt in range(3):
             try:
                 with httpx.Client(timeout=12.0) as client:
-                    res = client.post(url, json=payload)
+                    res = client.post(
+                        url,
+                        json=payload,
+                        headers={"x-goog-api-key": settings.GEMINI_API_KEY},
+                    )
                 if res.status_code == 200:
                     data = res.json()
                     candidates = data.get("candidates", [])
@@ -739,7 +747,7 @@ def call_gemini_ask(
                 if attempt < 2:
                     backoff = (2**attempt) * 1.5
                     logger.warning(
-                        f"Gemini ask attempt {attempt + 1} failed ({exc}); "
+                        f"Gemini ask attempt {attempt + 1} failed ({type(exc).__name__}); "
                         f"retrying in {backoff:.1f}s..."
                     )
                     time.sleep(backoff)
@@ -747,5 +755,5 @@ def call_gemini_ask(
                     return None
 
     except Exception as exc:
-        logger.warning(f"Gemini ask failed ({exc}).")
+        logger.warning(f"Gemini ask failed ({type(exc).__name__}).")
     return None

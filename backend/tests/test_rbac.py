@@ -1,349 +1,306 @@
-"""
-Integration and unit tests for Role-Based Access Control (RBAC) in trips API.
-"""
-
-import uuid
+"""Regression coverage for anonymous access, impersonation and trip boundaries."""
 
 import pytest
 from httpx import ASGITransport, AsyncClient
-from sqlmodel import Session, select
+from sqlmodel import Session
 
-from app.core.db import engine, init_db
-from app.core.security import hash_password
+from app.core.db import engine
 from app.main import app
-from app.models.schema import User
+from app.models.schema import Place, TripGuest
+from tests.factories import account_headers, join_member, new_trip
 
 
-@pytest.fixture(autouse=True)
-def setup_database() -> None:
-    init_db()
-    with Session(engine) as session:
-        if not session.exec(
-            select(User).where(User.email == "admin@antigravity.travel")
-        ).first():
-            session.add(
-                User(
-                    email="admin@antigravity.travel",
-                    name="Test Admin",
-                    hashed_password=hash_password("admin12345"),
-                    is_admin=True,
-                )
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "method,suffix,body",
+    [
+        ("GET", "", None),
+        ("GET", "/members", None),
+        ("GET", "/permissions", None),
+        ("PUT", "", {"title": "Stolen"}),
+        ("DELETE", "", None),
+        ("GET", "/constraints", None),
+        ("POST", "/constraints", {}),
+        ("GET", "/plan", None),
+        ("GET", "/plan/versions", None),
+        ("GET", "/plan/export.ics", None),
+        ("POST", "/plan", {}),
+        ("POST", "/plan/ask", {"question": "Best place?"}),
+        ("POST", "/plan/refine", {"instruction": "Change everything"}),
+        ("POST", "/rebalance", {}),
+        ("POST", "/plan/items", {}),
+        ("PUT", "/plan/items/missing", {}),
+        ("DELETE", "/plan/items/missing", None),
+        ("GET", "/expenses", None),
+        ("POST", "/expenses", {}),
+        ("GET", "/expenses/settle-up", None),
+        ("PUT", "/expenses/missing", {}),
+        ("DELETE", "/expenses/missing", None),
+    ],
+)
+async def test_trip_routes_require_verified_credentials(
+    method: str, suffix: str, body: dict | None
+) -> None:
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        trip = await new_trip(client)
+        response = await client.request(
+            method, f"/api/v1/trips/{trip['id']}{suffix}", json=body
+        )
+        assert response.status_code == 401, response.text
+        assert response.json()["detail"]["code"] in {"UNAUTHORIZED", "INVALID_TOKEN"}
+
+
+@pytest.mark.asyncio
+async def test_trip_creation_and_listing_use_the_authenticated_account() -> None:
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        alice = await new_trip(client, "alice")
+        bob = await new_trip(client, "bob")
+        assert (await client.get("/api/v1/trips")).status_code == 401
+        assert (await client.post("/api/v1/trips", json={})).status_code == 401
+        listed = await client.get("/api/v1/trips", headers=account_headers("alice"))
+        assert [t["id"] for t in listed.json()] == [alice["id"]]
+        assert (
+            await client.get(
+                f"/api/v1/trips/{alice['id']}", headers=account_headers("bob")
             )
-            session.commit()
-
-
-@pytest.mark.asyncio
-async def test_creator_permissions_and_management():
-    """Verify creator has management rights, creator permissions, and can update/delete trip."""
-    transport = ASGITransport(app=app)
-    async with AsyncClient(transport=transport, base_url="http://test") as client:
-        # 1. Register creator user
-        email = f"creator_{uuid.uuid4().hex[:8]}@example.com"
-        signup_resp = await client.post(
-            "/api/v1/auth/signup",
-            json={
-                "email": email,
-                "password": "CreatorPassword123!",
-                "name": "Alice Creator",
-            },
-        )
-        assert signup_resp.status_code == 201
-        creator_data = signup_resp.json()
-        creator_token = creator_data["token"]
-        creator_id = creator_data["user"]["id"]
-
-        # 2. Creator creates a trip
-        create_resp = await client.post(
+        ).status_code == 403
+        forged = await client.post(
             "/api/v1/trips",
+            headers=account_headers("bob"),
             json={
-                "title": "Azores Adventure",
-                "destination": "Ponta Delgada, Portugal",
+                "title": "Forged",
+                "destination": "Lisbon",
                 "start_date": "2026-11-01",
-                "end_date": "2026-11-05",
-                "creator_id": creator_id,
+                "end_date": "2026-11-03",
+                "creator_id": "alice",
             },
         )
-        assert create_resp.status_code == 201
-        trip = create_resp.json()
-        trip_id = trip["id"]
-        assert trip["creator_id"] == creator_id
-
-        # 3. Creator checks permissions with Bearer token
-        perm_resp = await client.get(
-            f"/api/v1/trips/{trip_id}/permissions",
-            headers={"Authorization": f"Bearer {creator_token}"},
-        )
-        assert perm_resp.status_code == 200
-        perm_data = perm_resp.json()
-        assert perm_data["can_manage"] is True
-        assert perm_data["is_creator"] is True
-        assert perm_data["role"] == "creator"
-
-        # 4. Creator checks permissions with query param user_id
-        perm_query_resp = await client.get(
-            f"/api/v1/trips/{trip_id}/permissions?user_id={creator_id}",
-        )
-        assert perm_query_resp.status_code == 200
-        perm_query_data = perm_query_resp.json()
-        assert perm_query_data["can_manage"] is True
-        assert perm_query_data["is_creator"] is True
-        assert perm_query_data["role"] == "creator"
-
-        # 5. A client-provided role must not grant creator permissions.
-        perm_header_resp = await client.get(
-            f"/api/v1/trips/{trip_id}/permissions",
-            headers={"X-User-Role": "creator"},
-        )
-        assert perm_header_resp.status_code == 200
-        assert perm_header_resp.json()["can_manage"] is False
-        assert perm_header_resp.json()["role"] == "joiner"
-
-        # 6. Creator can update trip with token
-        update_resp = await client.put(
-            f"/api/v1/trips/{trip_id}",
-            headers={"Authorization": f"Bearer {creator_token}"},
-            json={"title": "Updated Azores Adventure"},
-        )
-        assert update_resp.status_code == 200
-        assert update_resp.json()["title"] == "Updated Azores Adventure"
-
-        # 7. Creator can delete trip with token
-        delete_resp = await client.delete(
-            f"/api/v1/trips/{trip_id}",
-            headers={"Authorization": f"Bearer {creator_token}"},
-        )
-        assert delete_resp.status_code == 204
-
-        # 8. Verify trip is deleted
-        get_resp = await client.get(f"/api/v1/trips/{trip_id}")
-        assert get_resp.status_code == 404
+        assert forged.status_code == 403
+        await join_member(client, alice["id"], "bob")
+        listed = await client.get("/api/v1/trips", headers=account_headers("bob"))
+        assert {t["id"] for t in listed.json()} == {alice["id"], bob["id"]}
 
 
 @pytest.mark.asyncio
-async def test_joiner_flow_and_forbidden_actions():
-    """Verify joiners can join without login, list members, but are forbidden from updates/deletions."""
-    transport = ASGITransport(app=app)
-    async with AsyncClient(transport=transport, base_url="http://test") as client:
-        # 1. Register creator and joiner accounts
-        c_email = f"c_{uuid.uuid4().hex[:8]}@example.com"
-        j_email = f"j_{uuid.uuid4().hex[:8]}@example.com"
-
-        c_resp = await client.post(
-            "/api/v1/auth/signup",
-            json={"email": c_email, "password": "Password123!", "name": "Trip Creator"},
+async def test_invited_guests_receive_a_scoped_identity_and_cannot_impersonate_creators() -> (
+    None
+):
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        trip = await new_trip(client)
+        second_trip = await new_trip(client, "bob")
+        joined = await client.post(
+            f"/api/v1/trips/{trip['id']}/join",
+            json={"name": "Guest Alice", "user_id": "alice"},
         )
-        assert c_resp.status_code == 201
-        creator_id = c_resp.json()["user"]["id"]
-
-        j_resp = await client.post(
-            "/api/v1/auth/signup",
-            json={"email": j_email, "password": "Password123!", "name": "Bob Joiner"},
+        assert joined.status_code == 200
+        guest = joined.json()
+        assert guest["id"] != "alice"
+        assert guest["role"] == "joiner"
+        headers = {"Authorization": f"Bearer {guest['session_token']}"}
+        assert (
+            await client.get(f"/api/v1/trips/{trip['id']}", headers=headers)
+        ).status_code == 200
+        assert (
+            await client.get(f"/api/v1/trips/{second_trip['id']}", headers=headers)
+        ).status_code == 403
+        permissions = await client.get(
+            f"/api/v1/trips/{trip['id']}/permissions?user_id=alice",
+            headers={**headers, "X-User-Role": "admin"},
         )
-        assert j_resp.status_code == 201
-        joiner_token = j_resp.json()["token"]
-        joiner_id = j_resp.json()["user"]["id"]
-
-        # 2. Create trip
-        create_resp = await client.post(
-            "/api/v1/trips",
-            json={
-                "title": "Porto Wine Trail",
-                "destination": "Porto, Portugal",
-                "start_date": "2026-12-01",
-                "end_date": "2026-12-04",
-                "creator_id": creator_id,
-            },
+        assert permissions.json() == {
+            "can_manage": False,
+            "is_creator": False,
+            "role": "joiner",
+        }
+        assert (
+            await client.get(
+                f"/api/v1/trips/{trip['id']}/permissions?user_id=alice",
+                headers={"X-User-Role": "creator"},
+            )
+        ).status_code == 401
+        for suffix, body in [
+            ("", {"title": "Stolen"}),
+            ("/plan", {}),
+            ("/plan/refine", {}),
+            ("/rebalance", {}),
+        ]:
+            method = "PUT" if suffix == "" else "POST"
+            assert (
+                await client.request(
+                    method,
+                    f"/api/v1/trips/{trip['id']}{suffix}",
+                    headers=headers,
+                    json=body,
+                )
+            ).status_code == 403
+        assert (
+            await client.delete(f"/api/v1/trips/{trip['id']}", headers=headers)
+        ).status_code == 403
+        assert (await client.get("/api/v1/auth/me", headers=headers)).status_code == 401
+        members = await client.get(
+            f"/api/v1/trips/{trip['id']}/members", headers=headers
         )
-        assert create_resp.status_code == 201
-        trip_id = create_resp.json()["id"]
-
-        # 3. Guest joins without auth (auto-generated user_id from name)
-        join_resp1 = await client.post(
-            f"/api/v1/trips/{trip_id}/join",
-            json={"name": "Alice Guest"},
+        assert (
+            next(m["name"] for m in members.json() if m["id"] == guest["id"])
+            == "Guest Alice"
         )
-        assert join_resp1.status_code == 200
-        member1 = join_resp1.json()
-        assert member1["id"] == "alice_guest"
-        assert member1["name"] == "Alice Guest"
-        assert member1["initials"] == "AG"
-        assert member1["submitted"] is False
-        assert member1["role"] == "joiner"
-
-        # 4. Registered user joins with their user_id
-        join_resp2 = await client.post(
-            f"/api/v1/trips/{trip_id}/join",
-            json={"name": "Bob Joiner", "user_id": joiner_id},
+        assert all(m.get("session_token") is None for m in members.json())
+        forged_preferences = await client.post(
+            f"/api/v1/trips/{trip['id']}/constraints",
+            headers=headers,
+            json={"user_id": "alice", "budget_per_day": 75},
         )
-        assert join_resp2.status_code == 200
-        member2 = join_resp2.json()
-        assert member2["id"] == joiner_id
-        assert member2["name"] == "Bob Joiner"
-        assert member2["initials"] == "BJ"
-        assert member2["submitted"] is False
-        assert member2["role"] == "joiner"
-
-        # 5. Get trip members without auth
-        members_resp = await client.get(f"/api/v1/trips/{trip_id}/members")
-        assert members_resp.status_code == 200
-        members = members_resp.json()
-        assert len(members) == 3
-
-        creator_m = next((m for m in members if m["id"] == creator_id), None)
-        assert creator_m is not None
-        assert creator_m["role"] == "creator"
-        assert creator_m["name"] == "Trip Creator"
-        assert creator_m["initials"] == "TC"
-
-        bob_m = next((m for m in members if m["id"] == joiner_id), None)
-        assert bob_m is not None
-        assert bob_m["role"] == "joiner"
-        assert bob_m["submitted"] is False
-
-        # 6. Bob submits constraints -> submitted status updates
-        c_submit = await client.post(
-            f"/api/v1/trips/{trip_id}/constraints",
-            json={"user_id": joiner_id, "budget_per_day": 85.0},
+        assert forged_preferences.status_code == 403
+        saved = await client.post(
+            f"/api/v1/trips/{trip['id']}/constraints",
+            headers=headers,
+            json={"user_id": guest["id"], "budget_per_day": 75},
         )
-        assert c_submit.status_code == 200
-
-        members_resp2 = await client.get(f"/api/v1/trips/{trip_id}/members")
-        bob_m2 = next((m for m in members_resp2.json() if m["id"] == joiner_id), None)
-        assert bob_m2 is not None
-        assert bob_m2["submitted"] is True
-
-        # 7. Joiner permissions check
-        # Via query param
-        p1 = await client.get(
-            f"/api/v1/trips/{trip_id}/permissions?user_id={joiner_id}"
-        )
-        assert p1.status_code == 200
-        assert p1.json() == {"can_manage": False, "is_creator": False, "role": "joiner"}
-
-        # Via token
-        p2 = await client.get(
-            f"/api/v1/trips/{trip_id}/permissions",
-            headers={"Authorization": f"Bearer {joiner_token}"},
-        )
-        assert p2.status_code == 200
-        assert p2.json() == {"can_manage": False, "is_creator": False, "role": "joiner"}
-
-        # Via X-User-Role: joiner
-        p3 = await client.get(
-            f"/api/v1/trips/{trip_id}/permissions",
-            headers={"X-User-Role": "joiner"},
-        )
-        assert p3.status_code == 200
-        assert p3.json() == {"can_manage": False, "is_creator": False, "role": "joiner"}
-
-        # Without any info
-        p4 = await client.get(f"/api/v1/trips/{trip_id}/permissions")
-        assert p4.status_code == 200
-        assert p4.json() == {"can_manage": False, "is_creator": False, "role": "joiner"}
-
-        # 8. Joiner tries to update trip -> 403 Forbidden
-        put_token_resp = await client.put(
-            f"/api/v1/trips/{trip_id}",
-            headers={"Authorization": f"Bearer {joiner_token}"},
-            json={"title": "Hacked Title by Joiner"},
-        )
-        assert put_token_resp.status_code == 403
-        err_detail = put_token_resp.json()["detail"]
-        assert err_detail["code"] == "FORBIDDEN"
-        assert "Only the trip creator can update this trip." in err_detail["message"]
-
-        # Joiner tries to update with X-User-Role header -> 403 Forbidden
-        put_role_resp = await client.put(
-            f"/api/v1/trips/{trip_id}",
-            headers={"X-User-Role": "joiner"},
-            json={"title": "Hacked Title by Role Header"},
-        )
-        assert put_role_resp.status_code == 403
-        assert put_role_resp.json()["detail"]["code"] == "FORBIDDEN"
-
-        # 9. Joiner tries to delete trip -> 403 Forbidden
-        del_token_resp = await client.delete(
-            f"/api/v1/trips/{trip_id}",
-            headers={"Authorization": f"Bearer {joiner_token}"},
-        )
-        assert del_token_resp.status_code == 403
-        assert del_token_resp.json()["detail"]["code"] == "FORBIDDEN"
-
-        del_role_resp = await client.delete(
-            f"/api/v1/trips/{trip_id}",
-            headers={"X-User-Role": "joiner"},
-        )
-        assert del_role_resp.status_code == 403
-        assert del_role_resp.json()["detail"]["code"] == "FORBIDDEN"
-
-        # 10. Verify trip is NOT deleted and title unchanged
-        trip_check = await client.get(f"/api/v1/trips/{trip_id}")
-        assert trip_check.status_code == 200
-        assert trip_check.json()["title"] == "Porto Wine Trail"
+        assert saved.status_code == 200
+        assert (
+            await client.delete(
+                f"/api/v1/trips/{trip['id']}", headers=account_headers()
+            )
+        ).status_code == 204
+        with Session(engine) as session:
+            assert session.get(TripGuest, guest["id"]) is None
 
 
 @pytest.mark.asyncio
-async def test_rbac_admin_override_and_edge_cases():
-    """Verify admin privileges override creator checks, and verify 400/404 edge cases."""
-    transport = ASGITransport(app=app)
-    async with AsyncClient(transport=transport, base_url="http://test") as client:
-        # 1. Admin login
-        admin_login = await client.post(
-            "/api/v1/admin/login",
-            json={"email": "admin@antigravity.travel", "password": "admin12345"},
+async def test_verified_admin_can_manage_another_creators_trip() -> None:
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        trip = await new_trip(client)
+        admin = account_headers("admin", admin=True)
+        response = await client.get(
+            f"/api/v1/trips/{trip['id']}/permissions", headers=admin
         )
-        assert admin_login.status_code == 200
-        admin_token = admin_login.json()["token"]
+        assert response.json() == {
+            "can_manage": True,
+            "is_creator": False,
+            "role": "admin",
+        }
+        assert (
+            await client.put(
+                f"/api/v1/trips/{trip['id']}", headers=admin, json={"title": "Reviewed"}
+            )
+        ).status_code == 200
+        assert (
+            await client.delete(f"/api/v1/trips/{trip['id']}", headers=admin)
+        ).status_code == 204
 
-        # 2. Create trip by non-admin creator
-        create_resp = await client.post(
-            "/api/v1/trips",
-            json={
-                "title": "Coimbra University Tour",
-                "destination": "Coimbra, Portugal",
-                "start_date": "2026-11-10",
-                "end_date": "2026-11-12",
-                "creator_id": "creator_regular",
-            },
+
+@pytest.mark.asyncio
+async def test_cross_trip_stop_edits_and_shared_catalog_mutations_are_blocked() -> None:
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        first = await new_trip(client)
+        second = await new_trip(client)
+        headers = account_headers()
+        plan = (
+            await client.post(f"/api/v1/trips/{first['id']}/plan", headers=headers)
+        ).json()
+        item = plan["days"][0]["items"][0]
+        foreign_url = f"/api/v1/trips/{second['id']}/plan/items/{item['id']}"
+        assert (
+            await client.put(foreign_url, headers=headers, json={"cost": 999})
+        ).status_code == 404
+        assert (await client.delete(foreign_url, headers=headers)).status_code == 404
+        own_url = f"/api/v1/trips/{first['id']}/plan/items/{item['id']}"
+        response = await client.put(
+            own_url,
+            headers=headers,
+            json={"place_name": "Private custom stop", "cost": 3},
         )
-        assert create_resp.status_code == 201
-        trip_id = create_resp.json()["id"]
+        assert response.status_code == 200
+        assert response.json()["place_id"] != item["place_id"]
+        with Session(engine) as session:
+            original = session.get(Place, item["place_id"])
+            assert original is not None
+            assert original.name == item["place"]["name"]
+        assert (
+            await client.post(f"/api/v1/trips/{first['id']}/plan", headers=headers)
+        ).status_code == 200
+        assert (
+            await client.put(own_url, headers=headers, json={"cost": 99})
+        ).status_code == 409
 
-        # 3. Admin has manage permissions on the trip
-        admin_perm = await client.get(
-            f"/api/v1/trips/{trip_id}/permissions",
-            headers={"Authorization": f"Bearer {admin_token}"},
+
+@pytest.mark.asyncio
+async def test_members_cannot_overwrite_another_members_preferences_or_expenses() -> (
+    None
+):
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        trip = await new_trip(client)
+        bob = await join_member(client, trip["id"], "bob")
+        endpoint = f"/api/v1/trips/{trip['id']}"
+        assert (
+            await client.post(
+                endpoint + "/constraints",
+                headers=bob,
+                json={"user_id": "alice", "budget_per_day": 1},
+            )
+        ).status_code == 403
+        expense = (
+            await client.post(
+                endpoint + "/expenses",
+                headers=account_headers(),
+                json={
+                    "paid_by": "alice",
+                    "amount": 25,
+                    "description": "Lunch",
+                    "split_between": ["alice", "bob"],
+                },
+            )
+        ).json()
+        assert (
+            await client.put(
+                endpoint + f"/expenses/{expense['id']}", headers=bob, json={"amount": 1}
+            )
+        ).status_code == 403
+        assert (
+            await client.delete(endpoint + f"/expenses/{expense['id']}", headers=bob)
+        ).status_code == 403
+        for split in [[], ["alice", "alice"], ["outside-member"]]:
+            response = await client.put(
+                endpoint + f"/expenses/{expense['id']}",
+                headers=account_headers(),
+                json={"split_between": split},
+            )
+            assert response.status_code == 400
+        bad_number = await client.post(
+            endpoint + "/expenses",
+            headers=account_headers(),
+            content='{"paid_by":"alice","amount":NaN,"description":"Invalid"}',
         )
-        assert admin_perm.status_code == 200
-        assert admin_perm.json()["can_manage"] is True
+        assert bad_number.status_code == 422
 
-        # 4. Admin can update trip
-        admin_update = await client.put(
-            f"/api/v1/trips/{trip_id}",
-            headers={"Authorization": f"Bearer {admin_token}"},
-            json={"title": "Admin Updated Coimbra Tour"},
-        )
-        assert admin_update.status_code == 200
-        assert admin_update.json()["title"] == "Admin Updated Coimbra Tour"
 
-        # 5. Edge cases: non-existent trip
-        fake_id = "non-existent-trip-999"
-        join_fake = await client.post(
-            f"/api/v1/trips/{fake_id}/join",
-            json={"name": "Ghost User"},
-        )
-        assert join_fake.status_code == 404
-
-        members_fake = await client.get(f"/api/v1/trips/{fake_id}/members")
-        assert members_fake.status_code == 404
-
-        perm_fake = await client.get(f"/api/v1/trips/{fake_id}/permissions")
-        assert perm_fake.status_code == 404
-
-        # 6. Edge case: empty name on join
-        join_empty = await client.post(
-            f"/api/v1/trips/{trip_id}/join",
-            json={"name": "   "},
-        )
-        assert join_empty.status_code == 400
-        assert join_empty.json()["detail"]["code"] == "INVALID_NAME"
+@pytest.mark.asyncio
+async def test_invalid_and_tampered_tokens_do_not_grant_access() -> None:
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        trip = await new_trip(client)
+        for token in [
+            "not-a-token",
+            "x" * 5000,
+            account_headers()["Authorization"].removeprefix("Bearer ")[:-8]
+            + "forged==",
+        ]:
+            assert (
+                await client.get(
+                    f"/api/v1/trips/{trip['id']}",
+                    headers={"Authorization": f"Bearer {token}"},
+                )
+            ).status_code == 401

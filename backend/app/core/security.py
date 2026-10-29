@@ -53,7 +53,11 @@ def create_access_token(user_id: str) -> str:
 def decode_access_token(token: str) -> str | None:
     """Verify signature and expiration, returning user_id if valid."""
     try:
-        raw = base64.urlsafe_b64decode(token.encode("utf-8")).decode("utf-8")
+        if len(token) > 4096:
+            return None
+        raw = base64.b64decode(
+            token.encode("utf-8"), altchars=b"-_", validate=True
+        ).decode("utf-8")
         # Use maxsplit=2 so that a user_id containing ":" (e.g. future formats)
         # does not corrupt the parse. We always expect exactly 3 fields:
         # user_id, expires_at (unix timestamp), and HMAC-SHA256 hex signature.
@@ -67,11 +71,16 @@ def decode_access_token(token: str) -> str | None:
         ).hexdigest()
         if not hmac.compare_digest(sig, expected_sig):
             return None
-        if int(expires_str) < int(time.time()):
+        if int(expires_str) <= int(time.time()):
             return None
         return user_id
     except Exception:
         return None
+
+
+def create_guest_access_token(trip_id: str, guest_id: str) -> str:
+    """Scope a signed, expiring guest credential to exactly one invitation."""
+    return create_access_token(f"guest.{trip_id}.{guest_id}")
 
 
 def get_current_user_optional(

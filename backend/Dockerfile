@@ -1,27 +1,18 @@
-# Backend FastAPI Dockerfile
 FROM python:3.12-slim
 
 ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
     PORT=8000
-
 WORKDIR /app
 
-# Install system runtime dependencies
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    build-essential \
-    libpq-dev \
-    curl \
-    && rm -rf /var/lib/apt/lists/*
-
-# Install python dependencies
-COPY requirements.txt .
-RUN pip install --no-cache-dir --upgrade pip && \
-    pip install --no-cache-dir -r requirements.txt
-
-# Copy source code and alembic migrations
-COPY . .
-
+COPY requirements-prod.txt ./requirements-prod.txt
+RUN pip install --no-cache-dir -r requirements-prod.txt \
+    && groupadd --system app \
+    && useradd --system --gid app --home-dir /app app
+COPY --chown=app:app app ./app
+COPY --chown=app:app alembic.ini ./alembic.ini
+COPY --chown=app:app alembic ./alembic
+COPY --chown=app:app start.sh ./start.sh
+USER app
 EXPOSE 8000
-
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
+CMD ["sh", "/app/start.sh"]

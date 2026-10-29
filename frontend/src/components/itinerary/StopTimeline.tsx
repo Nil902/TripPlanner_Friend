@@ -5,7 +5,7 @@ import type { Stop } from '../../lib/constants';
 interface StopTimelineProps {
   stops: Stop[];
   day: number;
-  onDeleteStop: (stopId?: string) => void;
+  onDeleteStop?: (stopId?: string) => void;
 }
 
 function parseTimeToMinutes(timeStr: string): number {
@@ -33,7 +33,7 @@ export default function StopTimeline({ stops, day, onDeleteStop }: StopTimelineP
     <div style={{ background: '#fff', borderRadius: 12, border: `1px solid ${BORDER}`, padding: '4px 16px' }}>
       {currentStops.length === 0 ? (
         <div style={{ padding: '36px 16px', textAlign: 'center', color: MUTED, fontSize: 13, fontStyle: 'italic' }}>
-          No stops scheduled for Day {day} yet. Click 'Add Stop' above to add your own venue or activity to this day.
+          No stops scheduled for Day {day} yet. {onDeleteStop ? "Click 'Add Stop' above to add a venue or activity." : 'The trip creator can add stops here.'}
         </div>
       ) : (
         currentStops.map((stop, i) => (
@@ -126,10 +126,11 @@ export default function StopTimeline({ stops, day, onDeleteStop }: StopTimelineP
               )}
             </div>
 
-            <button
+            {onDeleteStop && <button
               type="button"
               onClick={() => onDeleteStop(stop.id)}
               title="Remove stop"
+              aria-label={`Remove ${stop.name}`}
               style={{
                 background: 'transparent',
                 border: 'none',
@@ -146,7 +147,7 @@ export default function StopTimeline({ stops, day, onDeleteStop }: StopTimelineP
               onMouseLeave={(e) => (e.currentTarget.style.color = MUTED)}
             >
               <Trash2 size={15} />
-            </button>
+            </button>}
           </div>
         ))
       )}

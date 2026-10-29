@@ -53,6 +53,12 @@ def verify(base: str, require_auth: bool) -> None:
             "Production deployment blocked: unauthenticated trip listing is allowed. "
             "Apply the reviewed authorization fixes before publishing."
         )
+    if require_auth:
+        for path in ("/docs", "/redoc", "/openapi.json"):
+            if fetch(base, path)[0] != 404:
+                raise RuntimeError(
+                    "Interactive API documentation must be disabled in production."
+                )
 
 
 def main() -> int:

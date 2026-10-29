@@ -19,7 +19,7 @@ from app.models.schema import Trip, Constraint, Place, Plan, PlanItem, Expense, 
 from app.core.config import settings
 
 target_metadata = SQLModel.metadata
-config.set_main_option("sqlalchemy.url", settings.DATABASE_URL)
+config.set_main_option("sqlalchemy.url", settings.DATABASE_URL.replace("%", "%%"))
 
 
 # other values from the config, defined by the needs of env.py,

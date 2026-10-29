@@ -469,10 +469,7 @@ def fetch_from_google_places_api(destination: str) -> list[CatalogItem]:
                     continue
 
                 if resp.status_code != 200:
-                    logger.warning(
-                        f"Google Places API returned {resp.status_code}: "
-                        f"{resp.text[:200]}"
-                    )
+                    logger.warning(f"Google Places API returned {resp.status_code}")
                     return []
 
                 data = resp.json()
@@ -627,10 +624,12 @@ def fetch_from_google_places_api(destination: str) -> list[CatalogItem]:
             time.sleep(wait)
         except httpx.HTTPError as exc:
             last_exc = exc
-            logger.warning(f"Google Places API HTTP error: {exc}")
+            logger.warning(f"Google Places API HTTP error: {type(exc).__name__}")
             return []
 
-    logger.warning(f"Google Places API failed after {max_retries} attempts: {last_exc}")
+    logger.warning(
+        f"Google Places API failed after {max_retries} attempts: {type(last_exc).__name__}"
+    )
     return []
 
 
@@ -693,7 +692,7 @@ def fetch_google_distance_matrix(
             )
             time.sleep(wait)
         except httpx.HTTPError as exc:
-            logger.warning(f"Google Distance Matrix HTTP error: {exc}")
+            logger.warning(f"Google Distance Matrix HTTP error: {type(exc).__name__}")
             return None
 
     logger.warning(f"Google Distance Matrix failed after {max_retries} attempts")

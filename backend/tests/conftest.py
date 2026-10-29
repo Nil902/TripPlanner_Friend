@@ -12,6 +12,7 @@ os.environ.update(
     DATABASE_URL=f"sqlite:///{Path(_test_directory.name) / 'tests.db'}",
     SECRET_KEY="test-only-signing-key-never-use-in-production",
     ENVIRONMENT="test",
+    RATE_LIMIT_ENABLED="false",
     GEMINI_API_KEY="",
     GOOGLE_MAPS_API_KEY="",
     OPENAI_API_KEY="",

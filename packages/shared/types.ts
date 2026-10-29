@@ -40,7 +40,7 @@ export interface CreateTripRequest {
   destination: string;
   start_date: string;
   end_date: string;
-  creator_id: string;
+  creator_id?: string;
 }
 
 export interface Constraint {
@@ -256,6 +256,7 @@ export interface Member {
   initials: string;
   submitted: boolean;
   role: 'creator' | 'joiner';
+  session_token?: string | null;
 }
 
 export type MemberResponse = Member;
@@ -268,7 +269,7 @@ export interface JoinTripRequest {
 export interface TripPermissions {
   can_manage: boolean;
   is_creator: boolean;
-  role: 'creator' | 'joiner';
+  role: 'creator' | 'joiner' | 'admin';
 }
 
 export type TripPermissionsResponse = TripPermissions;

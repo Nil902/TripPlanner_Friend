@@ -6,6 +6,7 @@ import pytest
 from httpx import ASGITransport, AsyncClient
 
 from app.main import app
+from tests.factories import account_headers
 
 
 @pytest.mark.asyncio
@@ -13,6 +14,7 @@ async def test_refine_plan_and_version_bump():
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as client:
         # 1. Create a trip
+        client.headers.update(account_headers("creator_refine_test"))
         trip_resp = await client.post(
             "/api/v1/trips",
             json={
@@ -106,6 +108,7 @@ async def test_manual_add_item_without_prior_plan():
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as client:
         # Create trip
+        client.headers.update(account_headers("manual_user_1"))
         trip_resp = await client.post(
             "/api/v1/trips",
             json={

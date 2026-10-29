@@ -11,7 +11,7 @@ import CostsPage from './pages/CostsPage';
 import OwnerTripPage from './pages/OwnerTripPage';
 import AdminLoginPage, { AdminUser } from './pages/Admin/AdminLoginPage';
 import AdminDashboardPage from './pages/Admin/AdminDashboardPage';
-import JoinModal from './components/JoinModal';
+import JoinModal, { type JoinedTrip } from './components/JoinModal';
 import ErrorBoundary from './components/ErrorBoundary';
 import { PageMiddlewareWrapper } from './middleware';
 import {
@@ -95,6 +95,23 @@ export default function App() {
   const [joinCodeParam, setJoinCodeParam] = useState('');
 
   const [isInitializing, setIsInitializing] = useState(true);
+  const [sessionError, setSessionError] = useState<string | null>(null);
+  const canManageActiveTrip = Boolean(currentUser && activeTrip && getAuthToken() && currentUser.id === activeTrip.creator_id);
+
+  useEffect(() => {
+    const handleExpiredGuest = (event: Event) => {
+      const tripId = (event as CustomEvent<{ tripId?: string }>).detail?.tripId;
+      setGuestSession(null);
+      setCurrentUser(null);
+      setActiveTrip(null);
+      setMembers([]);
+      setScreen('welcome');
+      setSessionError('Your guest session has expired. Rejoin the trip to continue.');
+      if (tripId) { setJoinCodeParam(tripId); setIsJoinModalOpen(true); }
+    };
+    window.addEventListener('trip-session-expired', handleExpiredGuest);
+    return () => window.removeEventListener('trip-session-expired', handleExpiredGuest);
+  }, []);
 
   // Combined initialization: parse URL, restore auth/guest session, fetch trip data
   useEffect(() => {
@@ -350,7 +367,7 @@ export default function App() {
         setJoinCodeParam(code);
         const guest = getGuestSession();
         // If already in this trip room, do not force modal
-        if (!guest || guest.tripId !== code) {
+        if (!getAuthToken() && (!guest || guest.tripId !== code)) {
           setIsJoinModalOpen(true);
         }
       }
@@ -375,92 +392,24 @@ export default function App() {
     }
   }, [currentUser?.role, currentUser?.id]);
 
-  // Handle public guest joining via code (no login required)
-  const handleJoinGuest = (member: {
-    id: string;
-    name: string;
-    initials: string;
-    tripId: string;
-  }) => {
-    const guestUser: CurrentUser = {
-      id: member.id,
-      name: member.name,
-      role: 'joiner',
-    };
-    setCurrentUser(guestUser);
-
-    // Save session in localStorage so closing the browser remembers them
-    setGuestSession({
-      tripId: member.tripId,
-      memberId: member.id,
-      name: member.name,
-      initials: member.initials,
+  // Enter a room only after the server confirms membership and returns the trip.
+  const handleJoinGuest = (member: JoinedTrip) => {
+    const trip = member.trip;
+    if (!member.session_token) setGuestSession(null);
+    setCurrentUser({
+      id: member.id, name: member.name,
+      email: currentUser?.id === member.id ? currentUser.email : undefined,
+      role: getAuthToken() ? 'creator' : 'joiner',
     });
-
-    // Optimistically set active trip immediately so room screen can render
-    const found = trips.find((t) => t.id === member.tripId);
-    setActiveTrip(
-      found || {
-        id: member.tripId,
-        title: formatTripTitle(member.tripId),
-        destination: formatDestination(member.tripId),
-        start_date: '2026-06-12',
-        end_date: '2026-06-14',
-        creator_id: 'creator',
-        status: 'collecting_constraints',
-        member_ids: [member.id],
-      },
-    );
-
-    // Optimistically add member
-    setMembers((prev) => {
-      if (prev.some((m) => m.id === member.id)) return prev;
-      return [
-        ...prev,
-        {
-          id: member.id,
-          name: member.name,
-          initials: member.initials,
-          submitted: false,
-          role: 'joiner',
-        },
-      ];
+    setActiveTrip({
+      ...trip, status: trip.status as TripSummary['status'],
+      start_date: String(trip.start_date), end_date: String(trip.end_date),
     });
-
-    // Immediately enter the room
+    setMembers([{ id: member.id, name: member.name, initials: member.initials,
+      submitted: member.submitted, role: member.role }]);
+    setSessionError(null);
     setScreen('room');
     setActive('overview');
-
-    // Sync with backend API in the background
-    void api.trips
-      .join(member.tripId, {
-        name: member.name,
-        user_id: member.id,
-      })
-      .then(async () => {
-        const [fetchedTrip, fetchedMembers] = await Promise.all([
-          api.trips.get(member.tripId).catch(() => null),
-          api.trips.getMembers(member.tripId).catch(() => null),
-        ]);
-
-        if (fetchedTrip?.id) {
-          setActiveTrip({
-            id: fetchedTrip.id,
-            title: fetchedTrip.title,
-            destination: fetchedTrip.destination,
-            start_date: String(fetchedTrip.start_date),
-            end_date: String(fetchedTrip.end_date),
-            creator_id: fetchedTrip.creator_id,
-            status: fetchedTrip.status as TripSummary['status'],
-            member_ids: fetchedTrip.member_ids || [],
-          });
-        }
-
-        if (Array.isArray(fetchedMembers) && fetchedMembers.length > 0) {
-          setMembers(fetchedMembers);
-        }
-      })
-      .catch(() => {});
   };
 
   // Handle creator signup or login
@@ -751,7 +700,7 @@ export default function App() {
                 tripName={activeTrip.title}
                 currentUser={currentUser}
                 onOpenAdmin={
-                  currentUser?.role === 'creator'
+                  canManageActiveTrip
                     ? () => setScreen('owner')
                     : undefined
                 }
@@ -774,7 +723,7 @@ export default function App() {
                 isMobileOpen={isMobileNavOpen}
                 onCloseMobile={() => setIsMobileNavOpen(false)}
                 onOpenAdmin={
-                  currentUser?.role === 'creator'
+                  canManageActiveTrip
                     ? () => {
                         setIsMobileNavOpen(false);
                         setScreen('owner');
@@ -815,9 +764,9 @@ export default function App() {
                       setActive={(id) => setActive(id as ActiveTab)}
                       planMode={planMode}
                       setPlanMode={setPlanMode}
-                      isCreator={currentUser?.role === 'creator'}
+                      isCreator={canManageActiveTrip}
                       onOpenAdmin={
-                        currentUser?.role === 'creator'
+                        canManageActiveTrip
                           ? () => setScreen('owner')
                           : undefined
                       }
@@ -838,6 +787,7 @@ export default function App() {
                     <ItineraryPage
                       tripId={activeTrip.id}
                       planMode={planMode}
+                      canManage={canManageActiveTrip}
                     />
                   </ErrorBoundary>
                 )}
@@ -928,6 +878,7 @@ export default function App() {
       activeTrip={activeTrip}
       setScreen={setScreen}
     >
+      {sessionError && <div role="alert" className="bg-amber-50 p-3 text-center text-sm text-amber-900">{sessionError}</div>}
       {renderScreen()}
 
       <JoinModal

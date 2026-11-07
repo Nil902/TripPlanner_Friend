@@ -40,6 +40,7 @@ describe('App Component Journeys', () => {
         memberId: 'guest-tab-test',
         name: 'Tab Tester',
         initials: 'TT',
+        token: 'signed-guest-test-token',
       }),
     );
 
@@ -188,6 +189,7 @@ describe('App Component Journeys', () => {
         memberId: 'guest-mobile-test',
         name: 'Mobile Tester',
         initials: 'MT',
+        token: 'signed-guest-test-token',
       }),
     );
 
@@ -196,6 +198,17 @@ describe('App Component Journeys', () => {
   });
 
   it('persists guest session in localStorage on join and auto-restores room on reload', async () => {
+    vi.spyOn(api.trips, 'join').mockResolvedValueOnce({
+      id: 'server-issued-guest-1', name: 'Guest Explorer', initials: 'GE',
+      submitted: false, role: 'joiner', session_token: 'signed-guest-test-token',
+    });
+    vi.spyOn(api.trips, 'get').mockResolvedValueOnce({
+      id: 'lisbon-202', title: 'Lisbon trip', destination: 'Lisbon',
+      start_date: '2026-11-01', end_date: '2026-11-03', creator_id: 'alice',
+      status: 'collecting_constraints', member_ids: ['alice', 'server-issued-guest-1'],
+      created_at: '2026-10-29T00:00:00Z',
+    });
+    vi.spyOn(api.trips, 'getMembers').mockResolvedValue([]);
     const { unmount } = render(<App />);
     const input = screen.getByPlaceholderText(/Enter trip code/i);
     fireEvent.change(input, { target: { value: 'lisbon-202' } });
@@ -208,8 +221,9 @@ describe('App Component Journeys', () => {
     const confirmBtn = screen.getByRole('button', { name: /Enter Trip Room/i });
     fireEvent.click(confirmBtn);
 
-    // Room should be visible
-    expect(screen.getByText(/Who's in the room/i)).toBeInTheDocument();
+    // Room becomes visible after the server verifies the invitation.
+    expect(await screen.findByText(/Who's in the room/i)).toBeInTheDocument();
+    expect(localStorage.getItem('ag_guest_session')).toContain('server-issued-guest-1');
     expect(localStorage.getItem('ag_guest_session')).toContain('Guest Explorer');
 
     // Simulate closing browser
@@ -231,6 +245,7 @@ describe('App Component Journeys', () => {
         memberId: 'guest_user',
         name: 'Guest User',
         initials: 'GU',
+        token: 'signed-guest-test-token',
       }),
     );
 
@@ -494,7 +509,7 @@ describe('App Component Journeys', () => {
     expect(window.location.pathname).toBe('/admin');
   });
 
-  it('hides itinerary content when Plan It Yourself is chosen and restores it when Let AI Plan It is chosen', async () => {
+  it('lets members switch display modes without exposing creator controls', async () => {
     vi.spyOn(api.plan, 'get').mockResolvedValue({
       id: 'plan-1',
       trip_id: 'trip-lisbon-202',
@@ -515,6 +530,7 @@ describe('App Component Journeys', () => {
         memberId: 'guest-plan-mode-test',
         name: 'Mode Tester',
         initials: 'MT',
+        token: 'signed-guest-test-token',
       }),
     );
 
@@ -529,10 +545,11 @@ describe('App Component Journeys', () => {
     const manualOption = screen.getByText(/Plan it yourself/i);
     fireEvent.click(manualOption);
 
-    // Manual destination form is visible
+    // Members can browse the manual view without creating visits.
     expect(
-      screen.getByText(/Plan It Yourself — Add Destination Visit/i),
-    ).toBeInTheDocument();
+      screen.queryByText(/Plan It Yourself — Add Destination Visit/i),
+    ).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /Open Full Itinerary/i })).toBeInTheDocument();
 
     // Switch back to "Let the AI plan it"
     const aiOption = screen.getByText(/Let the AI plan it/i);
@@ -540,5 +557,6 @@ describe('App Component Journeys', () => {
 
     // AI itinerary mode is shown again
     expect(screen.getByText(/Let the AI plan it/i)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /Generate Itinerary/i })).toBeDisabled();
   });
 });

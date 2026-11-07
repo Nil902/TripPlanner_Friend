@@ -1,13 +1,17 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { X, Users, ArrowRight, CheckCircle2 } from 'lucide-react';
 import { BORDER, INK, MUTED, PINE, SERIF } from '../lib/constants';
 import { PrimaryButton, SecondaryButton } from './Button';
+import type { MemberResponse, Trip } from '@shared/types';
+import { api, setGuestSession } from '../lib/api';
+
+export type JoinedTrip = MemberResponse & { trip: Trip };
 
 export interface JoinModalProps {
   isOpen: boolean;
   onClose: () => void;
   initialCode?: string;
-  onJoin: (member: { id: string; name: string; initials: string; tripId: string }) => void;
+  onJoin: (member: JoinedTrip) => void;
 }
 
 export default function JoinModal({
@@ -19,34 +23,43 @@ export default function JoinModal({
   const [code, setCode] = useState(initialCode);
   const [name, setName] = useState('');
   const [error, setError] = useState<string | null>(null);
+  const [isJoining, setIsJoining] = useState(false);
+
+  useEffect(() => {
+    if (isOpen) { setCode(initialCode); setError(null); }
+  }, [isOpen, initialCode]);
 
   if (!isOpen) return null;
 
-  const handleJoin = (e: React.FormEvent) => {
+  const handleJoin = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (isJoining) return;
+    setError(null);
     if (!name.trim()) {
       setError('Please enter your name.');
       return;
     }
 
-    const cleanName = name.trim();
-    const initials = cleanName
-      .split(' ')
-      .map((part) => part[0])
-      .join('')
-      .toUpperCase()
-      .slice(0, 2) || cleanName.slice(0, 2).toUpperCase();
-
-    const memberId = cleanName.toLowerCase().replace(/\s+/g, '_');
-    const tripId = code.trim() || 'trip-lisbon-202';
-
-    onJoin({
-      id: memberId,
-      name: cleanName,
-      initials,
-      tripId,
-    });
-    onClose();
+    let tripId = code.trim();
+    if (tripId.startsWith('http://') || tripId.startsWith('https://')) {
+      try {
+        const link = new URL(tripId);
+        tripId = link.searchParams.get('code') || link.searchParams.get('trip') || '';
+      } catch { tripId = ''; }
+    }
+    if (!tripId) { setError('Please enter a trip invitation code or link.'); return; }
+    setIsJoining(true);
+    try {
+      const member = await api.trips.join(tripId, { name: name.trim() });
+      if (member.session_token) {
+        setGuestSession({ tripId, memberId: member.id, name: member.name, initials: member.initials, token: member.session_token });
+      }
+      const trip = await api.trips.get(tripId);
+      onJoin({ ...member, trip });
+      onClose();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Could not join this trip. Please check the invitation and try again.');
+    } finally { setIsJoining(false); }
   };
 
   return (
@@ -157,6 +170,7 @@ export default function JoinModal({
 
         {error && (
           <div
+            role="alert"
             style={{
               margin: '12px 24px 0',
               padding: '8px 12px',
@@ -187,6 +201,7 @@ export default function JoinModal({
             </label>
             <input
               id="join-code"
+              required
               type="text"
               placeholder="e.g. lisbon-202 or tokyo-101"
               value={code}
@@ -239,8 +254,8 @@ export default function JoinModal({
             <SecondaryButton type="button" onClick={onClose}>
               Cancel
             </SecondaryButton>
-            <PrimaryButton type="submit">
-              Enter Trip Room <ArrowRight size={16} />
+            <PrimaryButton type="submit" disabled={isJoining}>
+              {isJoining ? 'Joining...' : 'Enter Trip Room'} <ArrowRight size={16} />
             </PrimaryButton>
           </div>
         </form>

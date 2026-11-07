@@ -1,6 +1,8 @@
 import pytest
 from httpx import ASGITransport, AsyncClient
+from sqlalchemy.exc import OperationalError
 
+from app.core.db import engine, get_session
 from app.main import app
 
 
@@ -17,29 +19,44 @@ async def test_health_endpoint():
 
 
 @pytest.mark.asyncio
-async def test_readiness_checks_database() -> None:
+async def test_readiness_requires_a_working_database() -> None:
     async with AsyncClient(
         transport=ASGITransport(app=app), base_url="http://test"
     ) as client:
         response = await client.get("/readyz")
     assert response.status_code == 200
-    assert response.json()["status"] == "ready"
+    assert response.json() == {"status": "ready", "version": "1.0.0"}
 
 
 @pytest.mark.asyncio
-async def test_readiness_redacts_database_errors(
+async def test_readiness_returns_a_redacted_failure(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from sqlmodel import Session
+    def unavailable() -> None:
+        raise OperationalError("SELECT 1", {}, Exception("private-connection-details"))
 
-    def fail_query(*args: object, **kwargs: object) -> None:
-        raise RuntimeError("postgresql://private:password@internal/production")
-
-    monkeypatch.setattr(Session, "exec", fail_query)
+    monkeypatch.setattr(engine, "connect", unavailable)
     async with AsyncClient(
         transport=ASGITransport(app=app), base_url="http://test"
     ) as client:
         response = await client.get("/readyz")
     assert response.status_code == 503
     assert response.json()["detail"]["code"] == "DATABASE_UNAVAILABLE"
-    assert "password" not in response.text
+    assert "private-connection-details" not in response.text
+
+
+@pytest.mark.asyncio
+async def test_unexpected_errors_return_structured_redacted_details(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def broken_session() -> None:
+        raise RuntimeError("synthetic-private-connection-data")
+
+    monkeypatch.setitem(app.dependency_overrides, get_session, broken_session)
+    transport = ASGITransport(app=app, raise_app_exceptions=False)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        response = await client.get("/api/v1/trips")
+    assert response.status_code == 500
+    assert response.json()["detail"]["code"] == "INTERNAL_ERROR"
+    assert response.headers["x-request-id"] == response.json()["detail"]["request_id"]
+    assert "synthetic-private-connection-data" not in response.text

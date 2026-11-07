@@ -284,7 +284,6 @@ paths:
       tags:
       - Trips
       summary: List Trips
-      description: List all trips.
       operationId: list_trips_api_v1_trips_get
       responses:
         '200':
@@ -296,11 +295,12 @@ paths:
                   $ref: '#/components/schemas/Trip'
                 type: array
                 title: Response List Trips Api V1 Trips Get
+      security:
+      - HTTPBearer: []
     post:
       tags:
       - Trips
       summary: Create Trip
-      description: Create a new trip room.
       operationId: create_trip_api_v1_trips_post
       requestBody:
         content:
@@ -321,13 +321,16 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/HTTPValidationError'
+      security:
+      - HTTPBearer: []
   /api/v1/trips/{trip_id}:
     get:
       tags:
       - Trips
       summary: Get Trip
-      description: Retrieve trip details by ID.
       operationId: get_trip_api_v1_trips__trip_id__get
+      security:
+      - HTTPBearer: []
       parameters:
       - name: trip_id
         in: path
@@ -352,8 +355,6 @@ paths:
       tags:
       - Trips
       summary: Update Trip
-      description: Update trip properties (destination, dates, title, status, members).
-        Allows all edits.
       operationId: update_trip_api_v1_trips__trip_id__put
       security:
       - HTTPBearer: []
@@ -364,14 +365,6 @@ paths:
         schema:
           type: string
           title: Trip Id
-      - name: X-User-Role
-        in: header
-        required: false
-        schema:
-          anyOf:
-          - type: string
-          - type: 'null'
-          title: X-User-Role
       requestBody:
         required: true
         content:
@@ -395,7 +388,6 @@ paths:
       tags:
       - Trips
       summary: Delete Trip
-      description: Delete a trip.
       operationId: delete_trip_api_v1_trips__trip_id__delete
       security:
       - HTTPBearer: []
@@ -406,14 +398,6 @@ paths:
         schema:
           type: string
           title: Trip Id
-      - name: X-User-Role
-        in: header
-        required: false
-        schema:
-          anyOf:
-          - type: string
-          - type: 'null'
-          title: X-User-Role
       responses:
         '204':
           description: Successful Response
@@ -428,8 +412,10 @@ paths:
       tags:
       - Trips
       summary: Join Trip
-      description: Join a trip room as a participant without authentication.
       operationId: join_trip_api_v1_trips__trip_id__join_post
+      security:
+      - HTTPBearer: []
+      - {}
       parameters:
       - name: trip_id
         in: path
@@ -461,9 +447,9 @@ paths:
       tags:
       - Trips
       summary: Get Trip Members
-      description: Retrieve all members of a trip with roles, names, initials, and
-        submission status.
       operationId: get_trip_members_api_v1_trips__trip_id__members_get
+      security:
+      - HTTPBearer: []
       parameters:
       - name: trip_id
         in: path
@@ -492,7 +478,6 @@ paths:
       tags:
       - Trips
       summary: Get Trip Permissions
-      description: Check effective trip permissions for creator, joiner, or administrator.
       operationId: get_trip_permissions_api_v1_trips__trip_id__permissions_get
       security:
       - HTTPBearer: []
@@ -503,14 +488,6 @@ paths:
         schema:
           type: string
           title: Trip Id
-      - name: user_id
-        in: query
-        required: false
-        schema:
-          anyOf:
-          - type: string
-          - type: 'null'
-          title: User Id
       responses:
         '200':
           description: Successful Response
@@ -531,6 +508,8 @@ paths:
       summary: Submit Constraint
       description: Submit or update constraints for a trip member.
       operationId: submit_constraint_api_v1_trips__trip_id__constraints_post
+      security:
+      - HTTPBearer: []
       parameters:
       - name: trip_id
         in: path
@@ -563,6 +542,8 @@ paths:
       summary: List Constraints
       description: List all submitted constraints for a trip.
       operationId: list_constraints_api_v1_trips__trip_id__constraints_get
+      security:
+      - HTTPBearer: []
       parameters:
       - name: trip_id
         in: path
@@ -595,6 +576,8 @@ paths:
       description: Trigger the autonomous agent propose-validate-rebalance planning
         loop.
       operationId: generate_plan_api_v1_trips__trip_id__plan_post
+      security:
+      - HTTPBearer: []
       parameters:
       - name: trip_id
         in: path
@@ -621,6 +604,8 @@ paths:
       summary: Get Plan
       description: Get the latest plan or a specific version.
       operationId: get_plan_api_v1_trips__trip_id__plan_get
+      security:
+      - HTTPBearer: []
       parameters:
       - name: trip_id
         in: path
@@ -658,6 +643,8 @@ paths:
       summary: List Plan Versions
       description: List all available plan versions for this trip.
       operationId: list_plan_versions_api_v1_trips__trip_id__plan_versions_get
+      security:
+      - HTTPBearer: []
       parameters:
       - name: trip_id
         in: path
@@ -688,8 +675,10 @@ paths:
       tags:
       - Plan
       summary: Add Plan Item
-      description: Add a custom plan item to the latest plan (Always allow all edits).
+      description: Add a custom stop after verifying trip management access.
       operationId: add_plan_item_api_v1_trips__trip_id__plan_items_post
+      security:
+      - HTTPBearer: []
       parameters:
       - name: trip_id
         in: path
@@ -721,8 +710,10 @@ paths:
       tags:
       - Plan
       summary: Update Plan Item
-      description: Directly edit an existing itinerary stop (Always allow all edits).
+      description: Edit an authorized stop in the latest plan of the specified trip.
       operationId: update_plan_item_api_v1_trips__trip_id__plan_items__item_id__put
+      security:
+      - HTTPBearer: []
       parameters:
       - name: trip_id
         in: path
@@ -761,6 +752,8 @@ paths:
       summary: Delete Plan Item
       description: Remove a plan item from the itinerary.
       operationId: delete_plan_item_api_v1_trips__trip_id__plan_items__item_id__delete
+      security:
+      - HTTPBearer: []
       parameters:
       - name: trip_id
         in: path
@@ -793,6 +786,8 @@ paths:
 
         Powers real-time feedback in manual mode and post-edit validations.'
       operationId: validate_current_plan_api_v1_trips__trip_id__plan_validate_post
+      security:
+      - HTTPBearer: []
       parameters:
       - name: trip_id
         in: path
@@ -824,6 +819,8 @@ paths:
         Re-runs proposing/balancing with user instruction and creates a newly versioned
         Plan.'
       operationId: refine_plan_api_v1_trips__trip_id__plan_refine_post
+      security:
+      - HTTPBearer: []
       parameters:
       - name: trip_id
         in: path
@@ -867,6 +864,8 @@ paths:
 
         otherwise. Answers are advisory only and do not modify the plan.'
       operationId: ask_agent_api_v1_trips__trip_id__plan_ask_post
+      security:
+      - HTTPBearer: []
       parameters:
       - name: trip_id
         in: path
@@ -902,6 +901,8 @@ paths:
 
         compatible with Apple Calendar, Google Calendar, and Outlook.'
       operationId: export_plan_ics_api_v1_trips__trip_id__plan_export_ics_get
+      security:
+      - HTTPBearer: []
       parameters:
       - name: trip_id
         in: path
@@ -932,6 +933,8 @@ paths:
 
         and preserving plan version history.'
       operationId: rebalance_trip_api_v1_trips__trip_id__rebalance_post
+      security:
+      - HTTPBearer: []
       parameters:
       - name: trip_id
         in: path
@@ -965,6 +968,8 @@ paths:
       summary: Add Expense
       description: Log a new group expense.
       operationId: add_expense_api_v1_trips__trip_id__expenses_post
+      security:
+      - HTTPBearer: []
       parameters:
       - name: trip_id
         in: path
@@ -997,6 +1002,8 @@ paths:
       summary: List Expenses
       description: List all recorded expenses for a trip.
       operationId: list_expenses_api_v1_trips__trip_id__expenses_get
+      security:
+      - HTTPBearer: []
       parameters:
       - name: trip_id
         in: path
@@ -1025,8 +1032,10 @@ paths:
       tags:
       - Expenses
       summary: Update Expense
-      description: Update an existing expense (Always allow all edits).
+      description: Update an expense as its payer or the trip manager.
       operationId: update_expense_api_v1_trips__trip_id__expenses__expense_id__put
+      security:
+      - HTTPBearer: []
       parameters:
       - name: trip_id
         in: path
@@ -1065,6 +1074,8 @@ paths:
       summary: Delete Expense
       description: Delete an expense.
       operationId: delete_expense_api_v1_trips__trip_id__expenses__expense_id__delete
+      security:
+      - HTTPBearer: []
       parameters:
       - name: trip_id
         in: path
@@ -1094,6 +1105,8 @@ paths:
       summary: Get Settle Up
       description: Calculate greedy minimal-transaction debt settlement.
       operationId: get_settle_up_api_v1_trips__trip_id__expenses_settle_up_get
+      security:
+      - HTTPBearer: []
       parameters:
       - name: trip_id
         in: path
@@ -1133,8 +1146,7 @@ paths:
       tags:
       - System
       summary: Check Readiness
-      description: Report whether requests can reach the database, without leaking
-        details.
+      description: Require a working database before routing traffic to a new deployment.
       operationId: check_readiness_readyz_get
       responses:
         '200':
@@ -1412,7 +1424,9 @@ components:
           format: date
           title: End Date
         creator_id:
-          type: string
+          anyOf:
+          - type: string
+          - type: 'null'
           title: Creator Id
       type: object
       required:
@@ -1420,7 +1434,6 @@ components:
       - destination
       - start_date
       - end_date
-      - creator_id
       title: CreateTripRequest
     DebtTransfer:
       properties:
@@ -1526,6 +1539,8 @@ components:
       properties:
         name:
           type: string
+          maxLength: 100
+          minLength: 1
           title: Name
         user_id:
           anyOf:
@@ -1568,6 +1583,11 @@ components:
           type: string
           title: Role
           default: joiner
+        session_token:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Session Token
       type: object
       required:
       - id
@@ -2169,6 +2189,3 @@ components:
     HTTPBearer:
       type: http
       scheme: bearer
-servers:
-- url: http://localhost:8000
-  description: Local development server

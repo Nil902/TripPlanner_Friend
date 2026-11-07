@@ -3,13 +3,18 @@ FastAPI application entry point with lifespan database initialization and regist
 """
 
 import logging
+import traceback
+import uuid
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+from pathlib import Path
 
-from fastapi import Depends, FastAPI, HTTPException
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
-from sqlmodel import Session, select
+from sqlalchemy import text
+from sqlalchemy.exc import SQLAlchemyError
 from starlette.concurrency import run_in_threadpool
+from starlette.responses import JSONResponse
 
 from app.api import (
     admin,
@@ -21,17 +26,21 @@ from app.api import (
     trips,
 )
 from app.core.config import settings
-from app.core.db import get_session, init_db
+from app.core.db import engine, init_db
+from app.core.logging import install_secret_redaction
+from app.core.request_guards import RequestGuards
 from app.models.schema import SystemHealthResponse
+from app.web import mount_frontend
 
 logger = logging.getLogger(__name__)
+install_secret_redaction()
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
-    # Initialize SQLModel SQLite database tables
     await run_in_threadpool(init_db)
     yield
+    await run_in_threadpool(engine.dispose)
 
 
 app = FastAPI(
@@ -39,24 +48,52 @@ app = FastAPI(
     description="Agentic planning, validation, dynamic rebalancing, and expense settle-up.",
     version="1.0.0",
     lifespan=lifespan,
+    docs_url="/docs" if settings.ENVIRONMENT != "production" else None,
+    redoc_url="/redoc" if settings.ENVIRONMENT != "production" else None,
+    openapi_url="/openapi.json" if settings.ENVIRONMENT != "production" else None,
 )
 
-# Configure CORS — SECURITY.md prohibits wildcard origins in production.
-# cors_origins_list must be non-empty; misconfiguration raises at startup.
-cors_origins = settings.cors_origins_list
-if not cors_origins:
-    import logging as _logging
 
-    _logging.getLogger(__name__).error(
-        "CORS_ORIGINS is empty — rejecting all cross-origin requests. "
-        "Set CORS_ORIGINS in .env (e.g. http://localhost:5173)."
+@app.exception_handler(Exception)
+async def handle_unexpected_error(request: Request, exc: Exception) -> JSONResponse:
+    request_id = uuid.uuid4().hex
+    locations = " -> ".join(
+        f"{frame.filename}:{frame.lineno} in {frame.name}"
+        for frame in traceback.extract_tb(exc.__traceback__)
     )
+    logger.error(
+        "Unhandled %s; request_id=%s; frames=%s",
+        type(exc).__name__,
+        request_id,
+        locations,
+    )
+    return JSONResponse(
+        status_code=500,
+        content={
+            "detail": {
+                "code": "INTERNAL_ERROR",
+                "message": "The request could not be completed. Please try again.",
+                "request_id": request_id,
+            }
+        },
+        headers={"X-Request-ID": request_id, "Cache-Control": "no-store"},
+    )
+
+
+# Configure CORS — SECURITY.md prohibits wildcard origins in production.
+# Same-origin deployment intentionally uses an empty cross-origin allowlist.
+cors_origins = settings.cors_origins_list
 app.add_middleware(
     CORSMiddleware,
     allow_origins=cors_origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
+)
+app.add_middleware(
+    RequestGuards,
+    enabled=settings.RATE_LIMIT_ENABLED,
+    production=settings.ENVIRONMENT == "production",
 )
 
 # Register API Routers
@@ -76,18 +113,27 @@ async def check_health() -> dict[str, str]:
 
 
 @app.get("/readyz", tags=["System"], response_model=SystemHealthResponse)
-def check_readiness(session: Session = Depends(get_session)) -> dict[str, str]:
-    """Report whether requests can reach the database, without leaking details."""
+def check_readiness() -> dict[str, str]:
+    """Require a working database before routing traffic to a new deployment."""
+    from fastapi import HTTPException
+
     try:
-        session.exec(select(1)).first()
-    except Exception as exc:
-        session.rollback()
-        logger.error("Database readiness check failed: %s", type(exc).__name__)
+        with engine.connect() as connection:
+            connection.execute(text("SELECT 1"))
+    except SQLAlchemyError as exc:
+        logger.error("Database readiness check failed (%s).", type(exc).__name__)
         raise HTTPException(
             status_code=503,
             detail={
                 "code": "DATABASE_UNAVAILABLE",
-                "message": "The service is temporarily unavailable. Please try again.",
+                "message": "Service is starting. Please try again.",
             },
-        ) from exc
+        ) from None
     return {"status": "ready", "version": "1.0.0"}
+
+
+# The production image includes the Vite build here. Local development continues
+# to use Vite's dev server and the existing API without a separate static copy.
+frontend_directory = Path(__file__).resolve().parents[1] / "static"
+if frontend_directory.is_dir():
+    mount_frontend(app, frontend_directory)

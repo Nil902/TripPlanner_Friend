@@ -5,16 +5,22 @@ Participant constraint intake API endpoints.
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlmodel import Session, select
 
+from app.core.access import TripAccess, require_trip_member
 from app.core.db import get_session
 from app.models.schema import Constraint, SubmitConstraintRequest, Trip, utc_now
 
-router = APIRouter(prefix="/api/v1/trips/{trip_id}/constraints", tags=["Constraints"])
+router = APIRouter(
+    prefix="/api/v1/trips/{trip_id}/constraints",
+    tags=["Constraints"],
+    dependencies=[Depends(require_trip_member)],
+)
 
 
 @router.post("", response_model=Constraint)
 def submit_constraint(
     trip_id: str,
     req: SubmitConstraintRequest,
+    access: TripAccess = Depends(require_trip_member),
     session: Session = Depends(get_session),
 ):
     """Submit or update constraints for a trip member."""
@@ -37,10 +43,14 @@ def submit_constraint(
             },
         )
 
-    # Ensure member is included in trip.member_ids
-    if req.user_id not in trip.member_ids:
-        trip.member_ids = list(trip.member_ids) + [req.user_id]
-        session.add(trip)
+    if req.user_id != access.identity.id:
+        raise HTTPException(
+            403,
+            detail={
+                "code": "FORBIDDEN",
+                "message": "You can only submit your own preferences.",
+            },
+        )
 
     # Check for existing constraint for this user
     existing = session.exec(

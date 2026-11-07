@@ -27,7 +27,7 @@ describe('expense persistence', () => {
     const onClose = vi.fn();
     render(<AddExpenseModal isOpen onClose={onClose} members={members} onAdd={onAdd} />);
     fillExpense();
-    expect(screen.getByRole('button', { name: 'Saving…' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: /Saving/ })).toBeDisabled();
     expect(onClose).not.toHaveBeenCalled();
     finish();
     await waitFor(() => expect(onClose).toHaveBeenCalledTimes(1));

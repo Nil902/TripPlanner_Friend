@@ -1,5 +1,10 @@
 # Step-by-step free deployment guide
 
+**Current release (2026-10-29):** use [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md).
+The prepared deployment serves the frontend and backend together on free Render
+with free Neon PostgreSQL. The separate Cloudflare setup below describes the
+earlier hosting layout and is superseded by that guide.
+
 For this repository's React + Vite frontend, FastAPI backend, and PostgreSQL database.
 Provider instructions checked on **October 10, 2026**. Dashboard labels and free-plan limits can change.
 

@@ -9,6 +9,7 @@ from httpx import ASGITransport, AsyncClient
 
 from app.main import app
 from app.services import proposer
+from tests.factories import account_headers
 
 
 @pytest.mark.asyncio
@@ -17,6 +18,7 @@ async def test_ask_agent_returns_fallback_recommendation(monkeypatch):
     monkeypatch.setattr(proposer.settings, "GEMINI_API_KEY", "")
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as client:
+        client.headers.update(account_headers("creator_1"))
         trip_res = await client.post(
             "/api/v1/trips",
             json={
@@ -47,6 +49,7 @@ async def test_ask_agent_empty_question_rejected(monkeypatch):
     monkeypatch.setattr(proposer.settings, "GEMINI_API_KEY", "")
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as client:
+        client.headers.update(account_headers("creator_1"))
         trip_res = await client.post(
             "/api/v1/trips",
             json={
@@ -71,6 +74,7 @@ async def test_ask_agent_unknown_trip_returns_404(monkeypatch):
     monkeypatch.setattr(proposer.settings, "GEMINI_API_KEY", "")
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as client:
+        client.headers.update(account_headers("creator_1"))
         res = await client.post(
             "/api/v1/trips/does-not-exist/plan/ask",
             json={"question": "Best place?"},
@@ -84,6 +88,7 @@ async def test_ask_agent_siem_reap_recommends_temples(monkeypatch):
     monkeypatch.setattr(proposer.settings, "GEMINI_API_KEY", "")
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as client:
+        client.headers.update(account_headers("creator_sr"))
         trip_res = await client.post(
             "/api/v1/trips",
             json={

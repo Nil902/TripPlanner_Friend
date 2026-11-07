@@ -1,4 +1,3 @@
-import asyncio
 import logging
 import uuid
 from datetime import datetime
@@ -6,6 +5,7 @@ from datetime import datetime
 from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
 from sqlmodel import Session, col, select
 
+from app.core.access import TripAccess, require_trip_manager, require_trip_member
 from app.core.db import get_session
 from app.models.schema import (
     AskAgentRequest,
@@ -40,7 +40,36 @@ from app.validators.travel_validator import check_travel_time
 
 logger = logging.getLogger(__name__)
 
-router = APIRouter(prefix="/api/v1/trips/{trip_id}/plan", tags=["Plan"])
+router = APIRouter(
+    prefix="/api/v1/trips/{trip_id}/plan",
+    tags=["Plan"],
+    dependencies=[Depends(require_trip_member)],
+)
+
+
+def get_editable_item(session: Session, trip_id: str, item_id: str) -> PlanItem:
+    item = session.get(PlanItem, item_id)
+    parent = session.get(Plan, item.plan_id) if item else None
+    if item is None or parent is None or parent.trip_id != trip_id:
+        raise HTTPException(
+            404,
+            detail={
+                "code": "PLAN_ITEM_NOT_FOUND",
+                "message": "This stop does not belong to this trip.",
+            },
+        )
+    latest = session.exec(
+        select(Plan).where(Plan.trip_id == trip_id).order_by(col(Plan.version).desc())
+    ).first()
+    if latest is None or latest.id != parent.id:
+        raise HTTPException(
+            409,
+            detail={
+                "code": "HISTORICAL_PLAN",
+                "message": "Reload the latest itinerary before editing.",
+            },
+        )
+    return item
 
 
 def assemble_plan_response(session: Session, trip: Trip, plan: Plan) -> PlanResponse:
@@ -90,8 +119,10 @@ def assemble_plan_response(session: Session, trip: Trip, plan: Plan) -> PlanResp
     return create_plan_response(plan, days_data)
 
 
-@router.post("", response_model=PlanResponse)
-async def generate_plan(
+@router.post(
+    "", response_model=PlanResponse, dependencies=[Depends(require_trip_manager)]
+)
+def generate_plan(
     trip_id: str,
     session: Session = Depends(get_session),
 ) -> PlanResponse:
@@ -111,11 +142,7 @@ async def generate_plan(
     ).all()
 
     try:
-        loop = asyncio.get_event_loop()
-        plan_response = await loop.run_in_executor(
-            None,
-            lambda: AgentPlanner.generate_plan(session, trip, list(constraints)),
-        )
+        plan_response = AgentPlanner.generate_plan(session, trip, list(constraints))
     except HTTPException:
         session.rollback()
         raise
@@ -206,13 +233,17 @@ def list_plan_versions(
     ]
 
 
-@router.post("/items", response_model=PlanItemResponse)
+@router.post(
+    "/items",
+    response_model=PlanItemResponse,
+    dependencies=[Depends(require_trip_manager)],
+)
 def add_plan_item(
     trip_id: str,
     req: CreatePlanItemRequest,
     session: Session = Depends(get_session),
 ):
-    """Add a custom plan item to the latest plan (Always allow all edits)."""
+    """Add a custom stop after verifying trip management access."""
     trip = session.get(Trip, trip_id)
     if not trip:
         raise HTTPException(
@@ -223,7 +254,7 @@ def add_plan_item(
             },
         )
 
-    if req.day_index < 0:
+    if req.day_index < 0 or req.day_index > (trip.end_date - trip.start_date).days:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail={
@@ -232,7 +263,10 @@ def add_plan_item(
             },
         )
 
-    if req.end_time <= req.start_time:
+    if (
+        req.end_time.replace(tzinfo=None).time()
+        <= req.start_time.replace(tzinfo=None).time()
+    ):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail={
@@ -350,15 +384,19 @@ def add_plan_item(
     )
 
 
-@router.put("/items/{item_id}", response_model=PlanItemResponse)
+@router.put(
+    "/items/{item_id}",
+    response_model=PlanItemResponse,
+    dependencies=[Depends(require_trip_manager)],
+)
 def update_plan_item(
     trip_id: str,
     item_id: str,
     req: UpdatePlanItemRequest,
     session: Session = Depends(get_session),
 ):
-    """Directly edit an existing itinerary stop (Always allow all edits)."""
-    item = session.get(PlanItem, item_id)
+    """Edit an authorized stop in the latest plan of the specified trip."""
+    item = get_editable_item(session, trip_id, item_id)
     if not item:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -368,7 +406,10 @@ def update_plan_item(
             },
         )
 
-    if req.day_index is not None and req.day_index < 0:
+    trip = session.get(Trip, trip_id)
+    assert trip is not None
+    day_index = req.day_index if req.day_index is not None else item.day_index
+    if day_index < 0 or day_index > (trip.end_date - trip.start_date).days:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail={
@@ -386,11 +427,10 @@ def update_plan_item(
             },
         )
 
-    if (
-        req.start_time is not None
-        and req.end_time is not None
-        and req.end_time <= req.start_time
-    ):
+    day_date = build_day_dates(trip.start_date, trip.end_date)[day_index]
+    new_start = datetime.combine(day_date, (req.start_time or item.start_time).time())
+    new_end = datetime.combine(day_date, (req.end_time or item.end_time).time())
+    if new_end <= new_start:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail={
@@ -401,12 +441,20 @@ def update_plan_item(
 
     place = session.get(Place, item.place_id)
 
-    if req.day_index is not None:
-        item.day_index = req.day_index
-    if req.start_time is not None:
-        item.start_time = req.start_time
-    if req.end_time is not None:
-        item.end_time = req.end_time
+    # A catalog place can be shared by other trips and historical plans.
+    # Keep edits private to this stop instead of mutating the shared record.
+    if place and any(
+        getattr(req, field) is not None
+        for field in ("place_name", "category", "lat", "lng", "cost")
+    ):
+        data = place.model_dump()
+        data.update(place_id=f"custom_{uuid.uuid4().hex}", cached_at=utc_now())
+        place = Place(**data)
+        item.place_id = place.place_id
+
+    item.day_index = day_index
+    item.start_time = new_start
+    item.end_time = new_end
     if req.cost is not None:
         item.cost = req.cost
         if place:
@@ -440,14 +488,18 @@ def update_plan_item(
     )
 
 
-@router.delete("/items/{item_id}", status_code=status.HTTP_204_NO_CONTENT)
+@router.delete(
+    "/items/{item_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    dependencies=[Depends(require_trip_manager)],
+)
 def delete_plan_item(
     trip_id: str,
     item_id: str,
     session: Session = Depends(get_session),
 ):
     """Remove a plan item from the itinerary."""
-    item = session.get(PlanItem, item_id)
+    item = get_editable_item(session, trip_id, item_id)
     if not item:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -507,10 +559,13 @@ def validate_current_plan(
     )
 
 
-@router.post("/refine", response_model=PlanResponse)
+@router.post(
+    "/refine", response_model=PlanResponse, dependencies=[Depends(require_trip_manager)]
+)
 def refine_plan(
     trip_id: str,
     req: RefinePlanRequest,
+    access: TripAccess = Depends(require_trip_manager),
     session: Session = Depends(get_session),
 ):
     """
@@ -555,7 +610,7 @@ def refine_plan(
             trip=trip,
             current_plan=plan,
             instruction=instruction,
-            user_id=req.user_id,
+            user_id=access.identity.id,
         )
     except HTTPException:
         session.rollback()

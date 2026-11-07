@@ -229,6 +229,7 @@ describe('Frontend RBAC & Route Middleware Guards', () => {
           memberId: 'guest-bob',
           name: 'Bob Joiner',
           initials: 'BJ',
+        token: 'signed-guest-test-token',
         }),
       );
 

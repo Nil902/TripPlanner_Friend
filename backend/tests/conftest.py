@@ -1,44 +1,41 @@
-"""
-Pytest configuration and test database initialization fixture.
-"""
+"""Run tests against disposable data without loading live service credentials."""
 
 import os
 from collections.abc import Generator
+from pathlib import Path
 from tempfile import TemporaryDirectory
 
 import pytest
-from sqlmodel import SQLModel
 
-# Set test-only configuration BEFORE importing any application modules. Tests
-# also import the engine directly, so overriding get_session alone is insufficient.
-_test_directory = TemporaryDirectory(prefix="travel-planner-tests-")
+_test_directory = TemporaryDirectory(prefix="tripplanner-tests-")
 os.environ.update(
-    PROJECT_NAME="Autonomous Travel & Group Itinerary Coordinator",
-    DATABASE_URL=f"sqlite:///{_test_directory.name}/test.db",
-    SECRET_KEY="test-only-key-never-use-in-a-deployment",
+    DATABASE_URL=f"sqlite:///{Path(_test_directory.name) / 'tests.db'}",
+    SECRET_KEY="test-only-signing-key-never-use-in-production",
+    ENVIRONMENT="test",
+    RATE_LIMIT_ENABLED="false",
     GEMINI_API_KEY="",
     GOOGLE_MAPS_API_KEY="",
     OPENAI_API_KEY="",
-    ADMIN_EMAIL="admin@antigravity.travel",
-    ADMIN_PASSWORD="admin12345",
+    ADMIN_EMAIL="",
+    ADMIN_PASSWORD="",
     REDIS_URL="",
 )
 
-from app.core.db import engine, init_db  # noqa: E402
+from sqlmodel import SQLModel  # noqa: E402
+
+from app.core.db import engine  # noqa: E402
 
 
 @pytest.fixture(autouse=True, scope="session")
-def initialize_database() -> Generator[None, None, None]:
-    """Create a disposable database and release it after the entire suite."""
-    init_db()
+def disposable_database() -> Generator[None, None, None]:
     yield
     engine.dispose()
     _test_directory.cleanup()
 
 
 @pytest.fixture(autouse=True)
-def isolate_database() -> None:
-    """Ensure individual tests do not depend on earlier test runs or modules."""
-    assert str(engine.url) == f"sqlite:///{_test_directory.name}/test.db"
+def initialize_database(disposable_database: None) -> Generator[None, None, None]:
+    """Each test starts with an empty database owned by this test run."""
+    SQLModel.metadata.create_all(engine)
+    yield
     SQLModel.metadata.drop_all(engine)
-    init_db()

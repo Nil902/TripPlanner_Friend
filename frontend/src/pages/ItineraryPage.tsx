@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { Calendar, AlertTriangle, Plus, Sparkles, Loader2 } from 'lucide-react';
 import {
   BORDER,
@@ -34,6 +34,7 @@ function formatTime24to12(time24: string): string {
 export interface ItineraryPageProps {
   tripId: string;
   planMode?: 'ai' | 'manual';
+  canManage?: boolean;
 }
 
 function getDestinationCenter(dest?: string): { lat: number; lng: number } {
@@ -159,7 +160,14 @@ function convertPlanDaysToStops(
   return result;
 }
 
-export default function ItineraryPage({ tripId }: ItineraryPageProps) {
+export default function ItineraryPage({ tripId, canManage = false }: ItineraryPageProps) {
+  const downloadRef = useRef<HTMLAnchorElement>(null);
+  const [exportUrl, setExportUrl] = useState<string | null>(null);
+  useEffect(() => {
+    if (!exportUrl) return;
+    downloadRef.current?.click();
+    return () => URL.revokeObjectURL(exportUrl);
+  }, [exportUrl]);
   const [day, setDay] = useState<number>(1);
   const [destination, setDestination] = useState<string>('');
   const [isRebalanceOpen, setIsRebalanceOpen] = useState(false);
@@ -306,8 +314,8 @@ export default function ItineraryPage({ tripId }: ItineraryPageProps) {
         }));
       }
       loadPlan();
-    } catch {
-      // Offline fallback: already placed optimistically in state
+    } catch (err) {
+      setGenerateError(err instanceof Error ? err.message : 'The stop could not be saved. Please try again.');
     }
   };
 
@@ -317,8 +325,9 @@ export default function ItineraryPage({ tripId }: ItineraryPageProps) {
       if (!stopId.startsWith('stop-')) {
         await api.plan.deleteItem(tripId, stopId);
       }
-    } catch {
-      // offline fallback
+    } catch (err) {
+      setGenerateError(err instanceof Error ? err.message : 'The stop could not be deleted. Please try again.');
+      return;
     }
     setStopsByDay((prev) => ({
       ...prev,
@@ -344,6 +353,7 @@ export default function ItineraryPage({ tripId }: ItineraryPageProps) {
 
   return (
     <div style={{ width: '100%', maxWidth: 760, margin: '0 auto' }}>
+      {exportUrl && <a ref={downloadRef} href={exportUrl} download="itinerary.ics" className="sr-only" aria-hidden="true" tabIndex={-1}>Download itinerary</a>}
       {/* Top Title & Rebalance Trigger */}
       <div
         style={{
@@ -392,7 +402,7 @@ export default function ItineraryPage({ tripId }: ItineraryPageProps) {
           {/* ── AI Generate Itinerary Button ── */}
           <PrimaryButton
             onClick={handleGeneratePlan}
-            disabled={isGenerating}
+            disabled={isGenerating || !canManage}
             style={{
               fontSize: 13,
               padding: '8px 16px',
@@ -410,9 +420,13 @@ export default function ItineraryPage({ tripId }: ItineraryPageProps) {
           </PrimaryButton>
 
           <SecondaryButton
-            onClick={() => {
-              const url = api.plan.getExportIcsUrl(tripId);
-              window.open(url, '_blank');
+            onClick={async () => {
+              try {
+                const calendar = await api.plan.exportIcs(tripId);
+                setExportUrl(URL.createObjectURL(new Blob([calendar], { type: 'text/calendar' })));
+              } catch (err) {
+                setGenerateError(err instanceof Error ? err.message : 'Could not export the itinerary.');
+              }
             }}
             style={{
               fontSize: 13,
@@ -427,6 +441,7 @@ export default function ItineraryPage({ tripId }: ItineraryPageProps) {
 
           <SecondaryButton
             onClick={() => setIsRebalanceOpen(true)}
+            disabled={!canManage}
             style={{
               fontSize: 13,
               padding: '8px 14px',
@@ -488,13 +503,13 @@ export default function ItineraryPage({ tripId }: ItineraryPageProps) {
       />
 
       {/* Natural-Language Refinement Assistant */}
-      <RefinementAssistant
+      {canManage && <RefinementAssistant
         tripId={tripId}
         destination={destination}
         planVersion={planVersion}
         notes={notes}
         onRefined={handleRefined}
-      />
+      />}
 
       {/* Interactive Ask-the-Agent Q&A Panel */}
       <AgentAskPanel tripId={tripId} destination={destination} />
@@ -522,6 +537,7 @@ export default function ItineraryPage({ tripId }: ItineraryPageProps) {
         <button
           type="button"
           onClick={() => setIsAddingStop(!isAddingStop)}
+          disabled={!canManage}
           style={{
             display: 'inline-flex',
             alignItems: 'center',
@@ -554,7 +570,7 @@ export default function ItineraryPage({ tripId }: ItineraryPageProps) {
       <StopTimeline
         stops={currentStops}
         day={day}
-        onDeleteStop={handleDeleteStop}
+        onDeleteStop={canManage ? handleDeleteStop : undefined}
       />
 
       <RebalanceModal

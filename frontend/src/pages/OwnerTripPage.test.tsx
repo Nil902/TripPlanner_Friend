@@ -1,60 +1,56 @@
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+import OwnerTripPage from './OwnerTripPage';
 import type { TripSummary } from '../lib/constants';
 import { api } from '../lib/api';
-import OwnerTripPage from './OwnerTripPage';
 
 const trip: TripSummary = {
-  id: 'owner-trip', title: 'Owner holiday', destination: 'Lisbon',
-  start_date: '2026-10-11', end_date: '2026-10-13',
-  status: 'planned', creator_id: 'creator', member_ids: ['creator'],
+  id: 'trip-1', title: 'Lisbon trip', destination: 'Lisbon',
+  start_date: '2026-11-01', end_date: '2026-11-03',
+  creator_id: 'owner', member_ids: ['owner', 'bob'], status: 'collecting_constraints',
 };
 
-function renderOwner() {
-  const props = {
-    trip, members: [], onUpdateTrip: vi.fn(), onUpdateMembers: vi.fn(),
-    onDeleteTrip: vi.fn(), onBackToRoom: vi.fn(),
-    currentUser: { id: 'creator', name: 'Creator', email: 'creator@example.com', role: 'creator' as const },
-  };
-  render(<OwnerTripPage {...props} />);
-  return props;
+beforeEach(() => {
+  localStorage.clear();
+  vi.restoreAllMocks();
+  window.innerWidth = 1024;
+  vi.spyOn(api.plan, 'get').mockResolvedValue({
+    id: 'plan-1', trip_id: trip.id, version: 1, validation_status: 'valid',
+    days: [], notes: [], created_at: '2026-10-29T00:00:00Z',
+  });
+});
+
+function renderOwner(onUpdateMembers = vi.fn()) {
+  render(<OwnerTripPage trip={trip} members={[
+    { id: 'owner', name: 'Alice', initials: 'AL', submitted: false, role: 'creator' },
+    { id: 'bob', name: 'Bob', initials: 'BO', submitted: false, role: 'joiner' },
+  ]} onUpdateTrip={vi.fn()} onUpdateMembers={onUpdateMembers}
+    onDeleteTrip={vi.fn()} onBackToRoom={vi.fn()}
+    currentUser={{ id: 'owner', name: 'Alice', role: 'creator' }} />);
 }
 
-describe('owner trip completion', () => {
-  beforeEach(() => {
-    vi.useFakeTimers({ toFake: ['Date'] });
-    vi.setSystemTime(new Date('2026-10-10T12:00:00Z'));
-  });
-  afterEach(() => {
-    cleanup();
-    vi.useRealTimers();
-    vi.restoreAllMocks();
+describe('OwnerTripPage', () => {
+  it('preserves members when the server rejects a removal', async () => {
+    vi.spyOn(api.trips, 'update').mockRejectedValue(new Error('Member could not be removed'));
+    const onUpdateMembers = vi.fn();
+    renderOwner(onUpdateMembers);
+    fireEvent.click(screen.getByRole('button', { name: 'Members' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Remove' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Remove' }));
+    await waitFor(() => expect(screen.getByRole('alert')).toHaveTextContent('Member could not be removed'));
+    expect(onUpdateMembers).not.toHaveBeenCalled();
+    expect(screen.getByText('Bob')).toBeInTheDocument();
   });
 
-  it('shows progress and completion controls directly in trip settings', () => {
+  it('shows a failed planning request without inventing a successful version', async () => {
+    vi.spyOn(api.plan, 'generate').mockRejectedValue(new Error('Planning request failed'));
     renderOwner();
-    expect(screen.getByRole('region', { name: 'Trip progress' })).toBeInTheDocument();
-    expect(screen.getByText('Upcoming')).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Mark trip as completed' })).toBeInTheDocument();
-  });
-
-  it('never reports a failed legacy completion action as successful', async () => {
-    vi.spyOn(api.trips, 'update').mockRejectedValueOnce(new Error('Cannot save completion.'));
-    const props = renderOwner();
-    fireEvent.click(screen.getByRole('button', { name: 'Danger zone' }));
-    fireEvent.click(screen.getByRole('button', { name: 'Complete trip' }));
-    fireEvent.click(screen.getByRole('button', { name: 'Yes, complete the trip' }));
-    expect(await screen.findByRole('alert')).toHaveTextContent('Cannot save completion');
-    expect(props.onUpdateTrip).not.toHaveBeenCalled();
-    expect(screen.getByRole('button', { name: 'Yes, complete the trip' })).toBeEnabled();
-  });
-
-  it('persists legacy completion through the existing update API', async () => {
-    vi.spyOn(api.trips, 'update').mockResolvedValueOnce({ ...trip, status: 'completed', created_at: '2026-10-01T00:00:00Z' });
-    const props = renderOwner();
-    fireEvent.click(screen.getByRole('button', { name: 'Danger zone' }));
-    fireEvent.click(screen.getByRole('button', { name: 'Complete trip' }));
-    fireEvent.click(screen.getByRole('button', { name: 'Yes, complete the trip' }));
-    await waitFor(() => expect(props.onUpdateTrip).toHaveBeenCalledWith(expect.objectContaining({ status: 'completed' })));
+    fireEvent.click(screen.getByRole('button', { name: 'Agent runs' }));
+    await screen.findByText('Version 1');
+    expect(screen.queryByRole('button', { name: 'Use this version' })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: /Regenerate Itinerary/ }));
+    await waitFor(() => expect(screen.getByRole('alert')).toHaveTextContent('Planning request failed'));
+    expect(screen.queryByText('Version 2')).not.toBeInTheDocument();
+    expect(screen.queryByText(/synthesized successfully/)).not.toBeInTheDocument();
   });
 });

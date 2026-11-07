@@ -13,6 +13,8 @@ import type {
   UpdateExpenseRequest,
   DisruptionEvent,
   AskAgentResponse,
+  MemberResponse,
+  JoinTripRequest,
   SystemHealthResponse,
   TripPermissionsResponse,
 } from '@shared/types';
@@ -70,13 +72,20 @@ export interface GuestSession {
   memberId: string;
   name: string;
   initials: string;
+  token: string;
 }
 
 export function getGuestSession(): GuestSession | null {
   try {
     const raw = localStorage.getItem('ag_guest_session');
     if (!raw) return null;
-    return JSON.parse(raw) as GuestSession;
+    const value: unknown = JSON.parse(raw);
+    if (!value || typeof value !== 'object') return null;
+    const session = value as Partial<GuestSession>;
+    if (typeof session.tripId !== 'string' || typeof session.memberId !== 'string' ||
+        typeof session.name !== 'string' || typeof session.initials !== 'string' ||
+        typeof session.token !== 'string' || !session.token) return null;
+    return session as GuestSession;
   } catch {
     return null;
   }
@@ -100,15 +109,19 @@ async function request<T>(
   body?: unknown,
   signal?: AbortSignal,
   retries = 2,
+  responseType: 'json' | 'text' = 'json',
 ): Promise<T> {
   const headers: Record<string, string> = {
     'Content-Type': 'application/json',
   };
 
   const isAdminPath = path.startsWith('/api/v1/admin');
+  const guest = getGuestSession();
+  const tripMatch = path.match(/^\/api\/v1\/trips\/([^/?]+)(?:\/|\?|$)/);
+  const guestToken = guest && tripMatch && decodeURIComponent(tripMatch[1]) === guest.tripId ? guest.token : null;
   const token = isAdminPath
     ? getAdminToken() || getAuthToken()
-    : getAuthToken();
+    : getAuthToken() || guestToken;
   if (token) {
     headers['Authorization'] = `Bearer ${token}`;
   }
@@ -122,73 +135,87 @@ async function request<T>(
     init.body = JSON.stringify(body);
   }
 
-  // Retrying a mutation after a lost response can create duplicate trips,
-  // expenses, or plan versions. Only reads are safe to retry automatically.
+  // A failed response does not prove a write was not committed by the server.
+  // Retrying reads is safe; mutations need an explicit user retry.
   const maxRetries = method === 'GET' ? retries : 0;
+  let lastError: unknown;
   for (let attempt = 0; attempt <= maxRetries; attempt++) {
-    let res: Response;
     try {
-      res = await fetch(`${BASE}${path}`, init);
-    } catch (err) {
-      if (signal?.aborted || (typeof err === 'object' && err !== null && 'name' in err && err.name === 'AbortError')) {
-        throw err;
-      }
-      if (attempt >= maxRetries) throw err;
-      await new Promise((resolve) => setTimeout(resolve, 2 ** attempt * 500));
-      continue;
-    }
+      const res = await fetch(`${BASE}${path}`, init);
 
-    if (!res.ok) {
-      // Don't retry 4xx client errors
-      if (res.status >= 400 && res.status < 500) {
-        let message = `Request failed: ${res.status} ${res.statusText}`;
-        try {
-          const json = (await res.json()) as {
-            detail?:
-              | string
-              | { message?: string; code?: string }
-              | Array<{ msg?: string; message?: string }>;
-            message?: string;
-          };
-          if (typeof json.detail === 'string') {
-            message = json.detail;
-          } else if (Array.isArray(json.detail)) {
-            message = json.detail
-              .map((d) => d.msg || d.message || JSON.stringify(d))
-              .join(', ');
-          } else if (json.detail && typeof json.detail.message === 'string') {
-            message = json.detail.message;
-          } else if (typeof json.message === 'string') {
-            message = json.message;
+      if (!res.ok) {
+        if (res.status === 401 && guestToken && token === guestToken) {
+          setGuestSession(null);
+          if (typeof window !== 'undefined') {
+            window.dispatchEvent(new CustomEvent('trip-session-expired', { detail: { tripId: guest?.tripId } }));
           }
-        } catch {
-          // response body is not JSON, keep default message
         }
-        throw new Error(message);
+        // Don't retry 4xx client errors
+        if (res.status >= 400 && res.status < 500) {
+          let message = `Request failed: ${res.status} ${res.statusText}`;
+          try {
+            const json = (await res.json()) as {
+              detail?:
+                | string
+                | { message?: string; code?: string }
+                | Array<{ msg?: string; message?: string }>;
+              message?: string;
+            };
+            if (typeof json.detail === 'string') {
+              message = json.detail;
+            } else if (Array.isArray(json.detail)) {
+              message = json.detail
+                .map((d) => d.msg || d.message || JSON.stringify(d))
+                .join(', ');
+            } else if (json.detail && typeof json.detail.message === 'string') {
+              message = json.detail.message;
+            } else if (typeof json.message === 'string') {
+              message = json.message;
+            }
+          } catch {
+            // response body is not JSON, keep default message
+          }
+          throw new ApiError(message, res.status);
+        }
+
+        throw new ApiError(
+          `Request failed: ${res.status} ${res.statusText}`,
+          res.status,
+        );
       }
 
-      // Retry transient failures on reads only.
-      const errMsg = `Request failed: ${res.status} ${res.statusText}`;
-      if (res.status >= 500 && attempt < maxRetries) {
+      // 204 No Content and 205 Reset Content have empty bodies.
+      if (res.status === 204 || res.status === 205) {
+        return {} as T;
+      }
+
+      if (responseType === 'text') return await res.text() as T;
+
+      const contentType = res.headers?.get('content-type') ?? '';
+      if (!contentType.includes('application/json')) {
+        return {} as T;
+      }
+
+      return res.json() as Promise<T>;
+    } catch (err) {
+      if (signal?.aborted || (typeof err === 'object' && err !== null && 'name' in err && err.name === 'AbortError')) throw err;
+      if (err instanceof ApiError && err.status < 500) throw err;
+      lastError = err;
+      if (attempt < maxRetries) {
         await new Promise((resolve) => setTimeout(resolve, 2 ** attempt * 500));
         continue;
       }
-      throw new Error(errMsg);
+      throw err;
     }
-
-    // 204 No Content and 205 Reset Content have empty bodies.
-    if (res.status === 204 || res.status === 205) {
-      return {} as T;
-    }
-
-    const contentType = res.headers?.get('content-type') ?? '';
-    if (!contentType.includes('application/json')) {
-      return {} as T;
-    }
-
-    return res.json() as Promise<T>;
   }
-  throw new Error('Request failed after retries.');
+  throw lastError;
+}
+
+export class ApiError extends Error {
+  constructor(message: string, readonly status: number) {
+    super(message);
+    this.name = 'ApiError';
+  }
 }
 
 export const api = {
@@ -235,13 +262,13 @@ export const api = {
     update: (tripId: string, data: UpdateTripRequest) =>
       api.put<Trip>(`/api/v1/trips/${tripId}`, data),
     delete: (tripId: string) => api.del<{ status: string }>(`/api/v1/trips/${tripId}`),
-    join: (tripId: string, data: { name: string; user_id?: string }) =>
-      api.post<{ id: string; name: string; initials: string; submitted: boolean; role: 'creator' | 'joiner' }>(
-        `/api/v1/trips/${tripId}/join`,
+    join: (tripId: string, data: JoinTripRequest) =>
+      api.post<MemberResponse>(
+        `/api/v1/trips/${encodeURIComponent(tripId)}/join`,
         data,
       ),
     getMembers: (tripId: string) =>
-      api.get<Array<{ id: string; name: string; initials: string; submitted: boolean; role: 'creator' | 'joiner' }>>(
+      api.get<MemberResponse[]>(
         `/api/v1/trips/${tripId}/members`,
       ),
     getPermissions: (tripId: string, userId?: string) =>
@@ -286,6 +313,8 @@ export const api = {
       }),
     getExportIcsUrl: (tripId: string) =>
       `${BASE}/api/v1/trips/${tripId}/plan/export.ics`,
+    exportIcs: (tripId: string) =>
+      request<string>('GET', `/api/v1/trips/${tripId}/plan/export.ics`, undefined, undefined, 2, 'text'),
   },
 
   expenses: {
@@ -380,3 +409,4 @@ export interface AdminSystemHealthNode {
   detail: string;
   latency_ms?: number;
 }
+

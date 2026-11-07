@@ -5,6 +5,7 @@ Expense logging and settle-up API endpoints.
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlmodel import Session, col, select
 
+from app.core.access import TripAccess, require_trip_member
 from app.core.db import get_session
 from app.models.schema import (
     CreateExpenseRequest,
@@ -15,7 +16,11 @@ from app.models.schema import (
 )
 from app.services.expense_service import calculate_settle_up
 
-router = APIRouter(prefix="/api/v1/trips/{trip_id}/expenses", tags=["Expenses"])
+router = APIRouter(
+    prefix="/api/v1/trips/{trip_id}/expenses",
+    tags=["Expenses"],
+    dependencies=[Depends(require_trip_member)],
+)
 
 
 @router.post("", response_model=Expense, status_code=status.HTTP_201_CREATED)
@@ -67,6 +72,15 @@ def add_expense(
             },
         )
 
+    if req.split_between and len(req.split_between) != len(set(req.split_between)):
+        raise HTTPException(
+            400,
+            detail={
+                "code": "INVALID_SPLIT",
+                "message": "Choose each split member only once.",
+            },
+        )
+
     # If split_between is empty, default to all trip members
     split_members = req.split_between if req.split_between else list(trip.member_ids)
     if not split_members:
@@ -115,9 +129,10 @@ def update_expense(
     trip_id: str,
     expense_id: str,
     req: UpdateExpenseRequest,
+    access: TripAccess = Depends(require_trip_member),
     session: Session = Depends(get_session),
 ):
-    """Update an existing expense (Always allow all edits)."""
+    """Update an expense as its payer or the trip manager."""
     expense = session.get(Expense, expense_id)
     if not expense or expense.trip_id != trip_id:
         raise HTTPException(
@@ -128,6 +143,14 @@ def update_expense(
             },
         )
 
+    if expense.paid_by != access.identity.id and not access.can_manage:
+        raise HTTPException(
+            403,
+            detail={
+                "code": "FORBIDDEN",
+                "message": "Only the payer or trip manager can change this expense.",
+            },
+        )
     if req.amount is not None and req.amount <= 0:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -138,6 +161,20 @@ def update_expense(
         )
 
     trip = session.get(Trip, expense.trip_id)
+
+    if req.split_between is not None:
+        if (
+            not req.split_between
+            or len(req.split_between) != len(set(req.split_between))
+            or not set(req.split_between).issubset(access.trip.member_ids)
+        ):
+            raise HTTPException(
+                400,
+                detail={
+                    "code": "INVALID_SPLIT",
+                    "message": "Choose distinct members of this trip to split the expense.",
+                },
+            )
 
     if req.paid_by is not None:
         if trip and req.paid_by not in trip.member_ids:
@@ -168,6 +205,7 @@ def update_expense(
 def delete_expense(
     trip_id: str,
     expense_id: str,
+    access: TripAccess = Depends(require_trip_member),
     session: Session = Depends(get_session),
 ):
     """Delete an expense."""
@@ -181,6 +219,14 @@ def delete_expense(
             },
         )
 
+    if expense.paid_by != access.identity.id and not access.can_manage:
+        raise HTTPException(
+            403,
+            detail={
+                "code": "FORBIDDEN",
+                "message": "Only the payer or trip manager can delete this expense.",
+            },
+        )
     session.delete(expense)
     session.commit()
     return None

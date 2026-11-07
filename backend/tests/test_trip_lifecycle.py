@@ -11,10 +11,11 @@ from sqlmodel import Session, SQLModel, create_engine
 
 from app.api import plan as plan_api
 from app.core.db import get_session
+from app.core.security import create_access_token
 from app.core.trip_lifecycle import get_trip_lifecycle_status
 from app.main import app
 from app.models import schema
-from app.models.schema import PlanResponse, Trip, TripStatus, ValidationStatus
+from app.models.schema import PlanResponse, Trip, TripStatus, User, ValidationStatus
 
 
 @pytest.mark.parametrize(
@@ -53,6 +54,16 @@ def trip_session() -> Generator[Session, None, None]:
     SQLModel.metadata.create_all(engine)
     previous_override = app.dependency_overrides.get(get_session)
     with Session(engine) as session:
+        for user_id in ("test-creator", "not-owner"):
+            session.add(
+                User(
+                    id=user_id,
+                    email=f"{user_id}@example.invalid",
+                    name=user_id,
+                    hashed_password="unused-test-password-hash",
+                )
+            )
+        session.commit()
 
         def override_session() -> Generator[Session, None, None]:
             yield session
@@ -80,7 +91,9 @@ async def test_status_updates_on_read_without_mutating_planning_state(
     now = datetime(2026, 10, 9, 23, 59, tzinfo=UTC)
     monkeypatch.setattr(schema, "utc_now", lambda: now)
     async with AsyncClient(
-        transport=ASGITransport(app=app), base_url="http://test"
+        transport=ASGITransport(app=app),
+        base_url="http://test",
+        headers={"Authorization": f"Bearer {create_access_token('test-creator')}"},
     ) as client:
         created = await client.post(
             "/api/v1/trips",
@@ -130,7 +143,9 @@ async def test_manual_completion_and_date_changes(
     trip_session.add(trip)
     trip_session.commit()
     async with AsyncClient(
-        transport=ASGITransport(app=app), base_url="http://test"
+        transport=ASGITransport(app=app),
+        base_url="http://test",
+        headers={"Authorization": f"Bearer {create_access_token('test-creator')}"},
     ) as client:
         moved = await client.put(
             f"/api/v1/trips/{trip.id}",
@@ -141,7 +156,7 @@ async def test_manual_completion_and_date_changes(
 
         denied = await client.put(
             f"/api/v1/trips/{trip.id}",
-            headers={"X-User-Role": "joiner"},
+            headers={"Authorization": f"Bearer {create_access_token('not-owner')}"},
             json={"status": "completed"},
         )
         assert denied.status_code == 403
@@ -191,7 +206,9 @@ async def test_generation_preserves_existing_travel_status(
         plan_api.AgentPlanner, "generate_plan", Mock(return_value=response)
     )
     async with AsyncClient(
-        transport=ASGITransport(app=app), base_url="http://test"
+        transport=ASGITransport(app=app),
+        base_url="http://test",
+        headers={"Authorization": f"Bearer {create_access_token('test-creator')}"},
     ) as client:
         generated = await client.post(f"/api/v1/trips/{trip.id}/plan")
         assert generated.status_code == 200
@@ -214,7 +231,9 @@ async def test_manual_plan_creation_does_not_reopen_finished_trip(
     trip_session.add(trip)
     trip_session.commit()
     async with AsyncClient(
-        transport=ASGITransport(app=app), base_url="http://test"
+        transport=ASGITransport(app=app),
+        base_url="http://test",
+        headers={"Authorization": f"Bearer {create_access_token('test-creator')}"},
     ) as client:
         added = await client.post(
             f"/api/v1/trips/{trip.id}/plan/items",

@@ -31,6 +31,7 @@ export default function AddExpenseModal({
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (isSaving) return;
+    setError(null);
     const num = parseFloat(amount);
     if (!desc.trim() || !Number.isFinite(num) || num <= 0) {
       setError('Please enter a valid description and positive amount.');
@@ -42,7 +43,6 @@ export default function AddExpenseModal({
       return;
     }
 
-    setError(null);
     setIsSaving(true);
     try {
       await onAdd({
@@ -53,11 +53,9 @@ export default function AddExpenseModal({
         category,
         splitBetween,
       });
-      setDesc('');
-      setAmount('');
       onClose();
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Expense could not be saved. Please try again.');
+      setError(err instanceof Error ? err.message : 'Could not save your expense. Please try again.');
     } finally {
       setIsSaving(false);
     }
@@ -144,7 +142,6 @@ export default function AddExpenseModal({
             </div>
           </div>
           <button
-            disabled={isSaving}
             type="button"
             onClick={onClose}
             aria-label="Close expense modal"
@@ -359,10 +356,12 @@ export default function AddExpenseModal({
           </div>
 
           <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 10 }}>
-            <SecondaryButton type="button" onClick={onClose} disabled={isSaving}>
+            <SecondaryButton type="button" onClick={onClose}>
               Cancel
             </SecondaryButton>
-            <PrimaryButton type="submit" disabled={isSaving}>{isSaving ? 'Saving…' : 'Log Expense'}</PrimaryButton>
+            <PrimaryButton type="submit" disabled={isSaving}>
+              {isSaving ? 'Saving...' : 'Log Expense'}
+            </PrimaryButton>
           </div>
         </form>
       </div>

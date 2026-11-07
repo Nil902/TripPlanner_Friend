@@ -3,8 +3,11 @@ Database engine and session dependency using SQLModel and SQLite.
 """
 
 import logging
+import sqlite3
 from collections.abc import Generator
 
+from sqlalchemy import event
+from sqlalchemy.pool import ConnectionPoolEntry
 from sqlmodel import Session, SQLModel, create_engine
 
 from app.core.config import settings
@@ -17,7 +20,7 @@ connect_args = {"check_same_thread": False} if "sqlite" in settings.DATABASE_URL
 pool_kwargs = (
     {}
     if "sqlite" in settings.DATABASE_URL
-    else {"pool_size": 20, "max_overflow": 20, "pool_recycle": 3600}
+    else {"pool_size": 5, "max_overflow": 5, "pool_timeout": 10, "pool_recycle": 300}
 )
 
 engine = create_engine(
@@ -25,8 +28,18 @@ engine = create_engine(
     echo=False,
     connect_args=connect_args,
     pool_pre_ping=True,
+    hide_parameters=True,
     **pool_kwargs,
 )
+
+
+if engine.dialect.name == "sqlite":
+
+    @event.listens_for(engine, "connect")
+    def enable_foreign_keys(
+        connection: sqlite3.Connection, record: ConnectionPoolEntry
+    ) -> None:
+        connection.execute("PRAGMA foreign_keys=ON")
 
 
 def init_db() -> None:
@@ -39,10 +52,12 @@ def init_db() -> None:
         Plan,
         PlanItem,
         Trip,
+        TripGuest,
         User,
     )
 
-    SQLModel.metadata.create_all(engine)
+    if settings.ENVIRONMENT != "production":
+        SQLModel.metadata.create_all(engine)
 
     # SQLite migration safeguard for is_admin column if users table was created previously
     if "sqlite" in settings.DATABASE_URL:
@@ -80,7 +95,7 @@ def init_db() -> None:
                 )
                 session.add(admin_user)
                 session.commit()
-                logger.info("Default admin account created: %s", admin_email)
+                logger.info("Configured administrator account created.")
     else:
         logger.warning(
             "ADMIN_EMAIL and ADMIN_PASSWORD are not set. "

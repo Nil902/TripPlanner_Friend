@@ -1,25 +1,24 @@
-import { fireEvent, render, screen } from '@testing-library/react';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import CreateTripModal from './CreateTripModal';
 import { api } from '../lib/api';
 
-vi.mock('../lib/api', () => ({ api: { trips: { create: vi.fn() } } }));
+afterEach(() => vi.restoreAllMocks());
 
-describe('trip creation persistence', () => {
-  beforeEach(() => vi.clearAllMocks());
-
-  it('keeps the form open and does not invent a trip after a failed save', async () => {
-    vi.mocked(api.trips.create).mockRejectedValue(new Error('Trip could not be saved'));
+describe('CreateTripModal', () => {
+  it('keeps the form open and reports a failed save without inventing a trip', async () => {
+    vi.spyOn(api.trips, 'create').mockRejectedValue(new Error('Service unavailable'));
     const onCreated = vi.fn();
     const onClose = vi.fn();
-    render(<CreateTripModal isOpen creatorId="alice" onClose={onClose} onCreated={onCreated} />);
-    fireEvent.change(screen.getByPlaceholderText('e.g. Kyoto Culinary Exploration'), { target: { value: 'Kyoto trip' } });
-    fireEvent.change(screen.getByPlaceholderText('e.g. Kyoto, Japan'), { target: { value: 'Kyoto' } });
-    fireEvent.change(screen.getByLabelText('Start Date'), { target: { value: '2027-01-01' } });
-    fireEvent.change(screen.getByLabelText('End Date'), { target: { value: '2027-01-03' } });
+    render(<CreateTripModal isOpen creatorId="creator-1" onCreated={onCreated} onClose={onClose} />);
+
+    fireEvent.change(screen.getByLabelText(/Trip Title/i), { target: { value: 'Autumn trip' } });
+    fireEvent.change(screen.getByLabelText(/Destination/i), { target: { value: 'Lisbon' } });
     fireEvent.click(screen.getByRole('button', { name: 'Create Trip Room' }));
-    expect(await screen.findByRole('alert')).toHaveTextContent('Trip could not be saved');
+
+    await waitFor(() => expect(screen.getByRole('alert')).toHaveTextContent('Service unavailable'));
     expect(onCreated).not.toHaveBeenCalled();
     expect(onClose).not.toHaveBeenCalled();
+    expect(screen.getByRole('button', { name: 'Create Trip Room' })).toBeEnabled();
   });
 });
